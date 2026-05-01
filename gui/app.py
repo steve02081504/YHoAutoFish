@@ -208,6 +208,197 @@ class TitleButton(QPushButton):
             painter.drawLine(int(cx + 5), int(cy - 5), int(cx - 5), int(cy + 5))
 
 
+class PulseTitleActionButton(QPushButton):
+    closeRequested = Signal()
+
+    def __init__(self, kind, text, tone, has_close=False, parent=None):
+        super().__init__("", parent)
+        self.kind = kind
+        self.label = text
+        self.tone = tone
+        self.has_close = bool(has_close)
+        self.glow_value = 0.0
+        self._close_pressed = False
+        self.setFixedSize(220 if self.has_close else 76, 34)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setAttribute(Qt.WA_Hover, True)
+        self.setStyleSheet("QPushButton { background: transparent; border: none; outline: none; }")
+        self._animation = QVariantAnimation(self)
+        self._animation.setStartValue(0.0)
+        self._animation.setEndValue(1.0)
+        self._animation.setDuration(1960 if tone == "coffee" else 1840)
+        self._animation.setEasingCurve(QEasingCurve.InOutSine)
+        self._animation.setLoopCount(-1)
+        self._animation.valueChanged.connect(self._set_glow_value)
+        self._animation.start()
+
+    def _set_glow_value(self, value):
+        self.glow_value = float(value)
+        self.update()
+
+    def _close_rect(self):
+        size = 13
+        return (self.width() - size - 8, (self.height() - size) // 2, size, size)
+
+    def _point_in_close(self, pos):
+        if not self.has_close:
+            return False
+        x, y, w, h = self._close_rect()
+        return x <= pos.x() <= x + w and y <= pos.y() <= y + h
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self._point_in_close(event.position().toPoint()):
+            self._close_pressed = True
+            event.accept()
+            self.update()
+            return
+        self._close_pressed = False
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._close_pressed:
+            should_emit = self._point_in_close(event.position().toPoint())
+            self._close_pressed = False
+            event.accept()
+            self.update()
+            if should_emit:
+                self.closeRequested.emit()
+            return
+        super().mouseReleaseEvent(event)
+
+    def enterEvent(self, event):
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._close_pressed = False
+        self.update()
+        super().leaveEvent(event)
+
+    def _tone_colors(self):
+        pulse = 0.35 + self.glow_value * 0.65
+        if self.tone == "coffee":
+            return (
+                QColor(126, 78, 40, int(58 + pulse * 70)),
+                QColor(230, 174, 102, int(132 + pulse * 105)),
+                QColor(255, 228, 187),
+            )
+        return (
+            QColor(118, 80, 226, int(58 + pulse * 72)),
+            QColor(191, 153, 255, int(132 + pulse * 105)),
+            QColor(239, 231, 255),
+        )
+
+    def _draw_icon(self, painter, color):
+        pen = QPen(color, 1.45)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        if self.kind == "coffee":
+            painter.drawRoundedRect(12, 13, 12, 8, 3, 3)
+            painter.drawArc(21, 14, 8, 7, -70 * 16, 210 * 16)
+            painter.drawLine(12, 24, 25, 24)
+            painter.drawArc(13, 7, 8, 8, 70 * 16, 85 * 16)
+            painter.drawArc(19, 7, 8, 8, 70 * 16, 85 * 16)
+        else:
+            painter.drawEllipse(11, 11, 7, 7)
+            painter.drawEllipse(21, 11, 7, 7)
+            painter.drawArc(8, 17, 14, 10, 25 * 16, 130 * 16)
+            painter.drawArc(18, 17, 14, 10, 25 * 16, 130 * 16)
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        rect = self.rect().adjusted(1, 4, -1, -4)
+        path = QPainterPath()
+        path.addRoundedRect(rect, 12, 12)
+
+        bg, border, text = self._tone_colors()
+        if self.isDown():
+            bg.setAlpha(min(180, bg.alpha() + 48))
+        elif self.underMouse():
+            bg.setAlpha(min(170, bg.alpha() + 32))
+            text = QColor(255, 255, 255)
+
+        painter.fillPath(path, bg)
+        outer = QColor(border)
+        outer.setAlpha(max(70, int(border.alpha() * 0.72)))
+        painter.setPen(QPen(outer, 2.0))
+        painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 11, 11)
+        painter.setPen(QPen(border, 1.25))
+        painter.drawPath(path)
+        self._draw_icon(painter, text)
+
+        painter.setPen(text)
+        painter.setFont(QFont("Microsoft YaHei UI", 9 if self.has_close else 10, QFont.DemiBold))
+        text_left = 34
+        text_right = 27 if self.has_close else 8
+        painter.drawText(text_left, 0, self.width() - text_left - text_right, self.height(), Qt.AlignVCenter | Qt.AlignLeft, self.label)
+
+        if self.has_close:
+            x, y, w, h = self._close_rect()
+            close_bg = QColor(255, 255, 255, 42 if self._close_pressed else 24)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(close_bg)
+            painter.drawEllipse(x, y, w, h)
+            close_pen = QPen(QColor(255, 238, 216, 210), 1.2)
+            close_pen.setCapStyle(Qt.RoundCap)
+            painter.setPen(close_pen)
+            painter.drawLine(x + 4, y + 4, x + w - 4, y + h - 4)
+            painter.drawLine(x + w - 4, y + 4, x + 4, y + h - 4)
+
+
+class PulseDialogShell(QFrame):
+    def __init__(self, tone="coffee", parent=None):
+        super().__init__(parent)
+        self.tone = tone
+        self.glow_value = 0.0
+        self.setAttribute(Qt.WA_StyledBackground, False)
+        self._animation = QVariantAnimation(self)
+        self._animation.setStartValue(0.0)
+        self._animation.setEndValue(1.0)
+        self._animation.setDuration(2400 if tone == "coffee" else 2260)
+        self._animation.setEasingCurve(QEasingCurve.InOutSine)
+        self._animation.setLoopCount(-1)
+        self._animation.valueChanged.connect(self._set_glow_value)
+        self._animation.start()
+
+    def _set_glow_value(self, value):
+        self.glow_value = float(value)
+        self.update()
+
+    def _accent_colors(self):
+        pulse = 0.35 + self.glow_value * 0.65
+        if self.tone == "purple":
+            return QColor(188, 145, 255, int(92 + pulse * 108)), QColor(72, 48, 128, int(30 + pulse * 42))
+        return QColor(232, 176, 102, int(92 + pulse * 108)), QColor(101, 66, 36, int(30 + pulse * 42))
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        rect = self.rect().adjusted(1, 1, -1, -1)
+        path = QPainterPath()
+        path.addRoundedRect(rect, 28, 28)
+        painter.fillPath(path, QColor(15, 23, 36, 248))
+
+        accent, soft = self._accent_colors()
+        gradient = QLinearGradient(rect.topLeft(), rect.bottomRight())
+        gradient.setColorAt(0.0, soft)
+        gradient.setColorAt(0.46, QColor(12, 22, 34, 0))
+        gradient.setColorAt(1.0, QColor(14, 126, 146, 24))
+        painter.fillPath(path, gradient)
+
+        outer = QColor(accent)
+        outer.setAlpha(max(48, int(accent.alpha() * 0.45)))
+        painter.setPen(QPen(outer, 2.0))
+        painter.drawRoundedRect(rect.adjusted(3, 3, -3, -3), 25, 25)
+        painter.setPen(QPen(accent, 1.15))
+        painter.drawPath(path)
+        super().paintEvent(event)
+
+
 class LogoImageCard(QFrame):
     def __init__(self, image_path=None, parent=None):
         super().__init__(parent)
@@ -458,20 +649,30 @@ class CustomTitleBar(QFrame):
         layout.addStretch()
 
         self.btn_about = TitleButton("about", "rgba(29, 208, 214, 0.18)")
+        self.btn_coffee = PulseTitleActionButton("coffee", "请作者喝一点咖啡吗？", "coffee", has_close=True)
+        self.btn_qq = PulseTitleActionButton("qq", "Q群", "purple")
         self.btn_min = TitleButton("min", "rgba(90, 129, 166, 0.22)")
         self.btn_max = TitleButton("max", "rgba(90, 129, 166, 0.22)")
         self.btn_close = TitleButton("close", "rgba(255, 102, 126, 0.58)")
 
         self.btn_about.setToolTip("关于")
+        self.btn_coffee.setToolTip("请作者喝一点咖啡吗？")
+        self.btn_qq.setToolTip("加入 QQ 群")
         self.btn_min.clicked.connect(self.window_ref.showMinimized)
         self.btn_max.clicked.connect(self.window_ref.toggle_maximize_restore)
         self.btn_close.clicked.connect(self.window_ref.close)
         self.btn_about.clicked.connect(self.window_ref.show_about_dialog)
+        self.btn_coffee.clicked.connect(self.window_ref.show_sponsor_dialog)
+        self.btn_coffee.closeRequested.connect(self.window_ref.confirm_hide_sponsor_button)
+        self.btn_qq.clicked.connect(self.window_ref.show_qq_group_dialog)
 
+        layout.addWidget(self.btn_coffee)
+        layout.addWidget(self.btn_qq)
         layout.addWidget(self.btn_about)
         layout.addWidget(self.btn_min)
         layout.addWidget(self.btn_max)
         layout.addWidget(self.btn_close)
+        self.sync_sponsor_visibility()
 
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -497,6 +698,11 @@ class CustomTitleBar(QFrame):
 
     def sync_state(self):
         self.btn_max.set_kind("restore" if self.window_ref.isMaximized() else "max")
+        self.sync_sponsor_visibility()
+
+    def sync_sponsor_visibility(self):
+        hidden = bool(getattr(self.window_ref, "config", {}).get("sponsor_button_hidden", False))
+        self.btn_coffee.setVisible(not hidden)
 
 
 class StatusChip(QLabel):
@@ -784,6 +990,199 @@ class AboutDialog(QDialog):
         close_btn.clicked.connect(self.accept)
         action_row.addWidget(close_btn)
         layout.addLayout(action_row)
+
+
+class SponsorHideDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setModal(True)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.resize(560, 330)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(14, 14, 14, 14)
+        root.setSpacing(0)
+
+        shell = PulseDialogShell("coffee")
+        add_shadow(shell, blur=30, alpha=120, offset=(0, 12))
+        root.addWidget(shell)
+
+        layout = QVBoxLayout(shell)
+        layout.setContentsMargins(24, 22, 24, 22)
+        layout.setSpacing(14)
+
+        title = QLabel("关闭请喝咖啡入口")
+        title.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 24px; font-weight: 900;")
+        layout.addWidget(title)
+
+        body = QLabel(
+            "确认关闭后，标题栏里的“请作者喝一点咖啡吗？”入口会从后续启动中隐藏，不会再自动显示。\n\n"
+            "这个设置只影响赞助入口的展示，不会影响自动钓鱼、鱼饵补给、钓鱼记录、图鉴记录、更新检查和其他功能。\n\n"
+            "后续如需恢复显示，可以在配置文件中恢复对应显示设置。"
+        )
+        body.setWordWrap(True)
+        body.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 13px; line-height: 1.5;")
+        layout.addWidget(body, 1)
+
+        actions = QHBoxLayout()
+        actions.addStretch()
+        cancel_btn = QPushButton("取消")
+        cancel_btn.setFocusPolicy(Qt.NoFocus)
+        cancel_btn.setCursor(Qt.PointingHandCursor)
+        cancel_btn.setStyleSheet(secondary_button_stylesheet())
+        cancel_btn.clicked.connect(self.reject)
+        actions.addWidget(cancel_btn)
+
+        confirm_btn = QPushButton("确认，不再显示")
+        confirm_btn.setFocusPolicy(Qt.NoFocus)
+        confirm_btn.setCursor(Qt.PointingHandCursor)
+        confirm_btn.setStyleSheet(primary_button_stylesheet())
+        confirm_btn.clicked.connect(self.accept)
+        actions.addWidget(confirm_btn)
+        layout.addLayout(actions)
+
+
+class QQGroupDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setModal(True)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.resize(460, 280)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(14, 14, 14, 14)
+        root.setSpacing(0)
+
+        shell = PulseDialogShell("purple")
+        add_shadow(shell, blur=32, alpha=130, offset=(0, 12))
+        root.addWidget(shell)
+
+        layout = QVBoxLayout(shell)
+        layout.setContentsMargins(24, 22, 24, 22)
+        layout.setSpacing(14)
+
+        title = QLabel("QQ群")
+        title.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 25px; font-weight: 900;")
+        layout.addWidget(title)
+
+        note = QLabel("当前可加入的交流群如下。后续增加群组时会显示在这里。")
+        note.setWordWrap(True)
+        note.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 13px;")
+        layout.addWidget(note)
+
+        group_btn = QPushButton("加入 QQ 群 483584006")
+        group_btn.setFocusPolicy(Qt.NoFocus)
+        group_btn.setCursor(Qt.PointingHandCursor)
+        group_btn.setStyleSheet(primary_button_stylesheet())
+        group_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://qm.qq.com/q/DR9CCFdYK4")))
+        layout.addWidget(group_btn)
+        layout.addStretch()
+
+        close_btn = QPushButton("关闭")
+        close_btn.setFocusPolicy(Qt.NoFocus)
+        close_btn.setCursor(Qt.PointingHandCursor)
+        close_btn.setStyleSheet(secondary_button_stylesheet())
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn, 0, Qt.AlignRight)
+
+
+class SponsorQrImageCard(QFrame):
+    def __init__(self, image_path, parent=None):
+        super().__init__(parent)
+        self.image_path = image_path
+        self.source_pixmap = QPixmap(image_path) if image_path and os.path.exists(image_path) else QPixmap()
+        if self.source_pixmap.isNull():
+            self.rendered_pixmap = QPixmap()
+            self.setFixedSize(300, 300)
+        else:
+            self.rendered_pixmap = self.source_pixmap.scaled(300, 300, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self.setFixedSize(self.rendered_pixmap.width(), self.rendered_pixmap.height())
+        self.setAttribute(Qt.WA_StyledBackground, False)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        image_rect = self.rect().adjusted(1, 1, -1, -1)
+        image_radius = min(42, max(24, int(min(image_rect.width(), image_rect.height()) * 0.16)))
+        image_path = QPainterPath()
+        image_path.addRoundedRect(image_rect, image_radius, image_radius)
+
+        if not self.rendered_pixmap.isNull():
+            painter.setClipPath(image_path)
+            painter.drawPixmap(0, 0, self.rendered_pixmap)
+            painter.setClipping(False)
+            painter.setPen(QPen(QColor(232, 176, 102, 96), 1.05))
+            painter.drawPath(image_path)
+        else:
+            painter.fillPath(image_path, QColor(8, 18, 30, 202))
+            painter.setPen(QPen(QColor(255, 255, 255, 30), 1.1))
+            painter.drawPath(image_path)
+            painter.setPen(QColor(APP_COLORS["text_dim"]))
+            painter.setFont(QFont("Microsoft YaHei UI", 12, QFont.DemiBold))
+            painter.drawText(self.rect(), Qt.AlignCenter, "图片读取失败")
+
+        painter.end()
+        super().paintEvent(event)
+
+
+class SponsorDialog(QDialog):
+    def __init__(self, image_paths, parent=None):
+        super().__init__(parent)
+        self.setModal(True)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.resize(720, 560)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(14, 14, 14, 14)
+        root.setSpacing(0)
+
+        shell = PulseDialogShell("coffee")
+        add_shadow(shell, blur=36, alpha=135, offset=(0, 14))
+        root.addWidget(shell)
+
+        layout = QVBoxLayout(shell)
+        layout.setContentsMargins(28, 24, 28, 24)
+        layout.setSpacing(16)
+
+        title = QLabel("请喝咖啡")
+        title.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 30px; font-weight: 900;")
+        layout.addWidget(title)
+
+        note = QLabel(
+            "如果这个工具帮你节省了重复操作的时间，可以用这种方式支持后续维护。"
+            "收到的支持会优先用于识别模板更新、不同分辨率适配、异常日志排查和发布前测试。"
+            "完全自愿，不影响任何功能使用。"
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 13px;")
+        layout.addWidget(note)
+
+        qr_row = QHBoxLayout()
+        qr_row.setContentsMargins(0, 8, 0, 4)
+        qr_row.setSpacing(92)
+        if image_paths:
+            qr_row.addStretch(1)
+            for _label, image_path in image_paths[:2]:
+                qr_row.addWidget(SponsorQrImageCard(image_path), 0, Qt.AlignCenter)
+            qr_row.addStretch(1)
+        else:
+            missing = QLabel("未找到收款码图片，请检查发布目录中的 sponsor_qr 资源。")
+            missing.setWordWrap(True)
+            missing.setAlignment(Qt.AlignCenter)
+            missing.setStyleSheet(f"background: rgba(255,255,255,0.055); border: 1px solid rgba(255,255,255,0.14); border-radius: 18px; color: {APP_COLORS['text_dim']}; padding: 28px; font-size: 13px;")
+            qr_row.addWidget(missing)
+        layout.addLayout(qr_row, 1)
+
+        close_btn = QPushButton("关闭")
+        close_btn.setFocusPolicy(Qt.NoFocus)
+        close_btn.setCursor(Qt.PointingHandCursor)
+        close_btn.setStyleSheet(primary_button_stylesheet())
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn, 0, Qt.AlignRight)
 
 
 class UpdatePolicyConfirmDialog(QDialog):
@@ -2288,6 +2687,8 @@ class AppWindow(QMainWindow):
             "auto_switch_to_log": True,
             "debug_mode": False,
             "bait_shop_debug_mode": False,
+            "sponsor_button_hidden": False,
+            "sponsor_qr_dir": "sponsor_qr",
         }
         self.config = dict(self.default_config)
         self.load_config()
@@ -2646,6 +3047,79 @@ class AppWindow(QMainWindow):
     def show_about_dialog(self):
         self.about_dialog = AboutDialog(self)
         dialog = self.about_dialog
+        dialog.move(self.geometry().center() - dialog.rect().center())
+        dialog.open()
+
+    def show_qq_group_dialog(self):
+        self.qq_group_dialog = QQGroupDialog(self)
+        dialog = self.qq_group_dialog
+        dialog.move(self.geometry().center() - dialog.rect().center())
+        dialog.open()
+
+    def _sponsor_qr_directories(self):
+        base_dir = os.path.dirname(CONFIG_FILE)
+        candidates = []
+        env_dir = os.environ.get("YHO_SPONSOR_QR_DIR", "").strip()
+        if env_dir:
+            candidates.append(env_dir)
+        configured = str(self.config.get("sponsor_qr_dir", "") or "").strip()
+        if configured:
+            candidates.append(configured if os.path.isabs(configured) else os.path.join(base_dir, configured))
+        candidates.append(os.path.join(base_dir, "sponsor_qr"))
+        candidates.append(resource_path("sponsor_qr"))
+        seen = set()
+        result = []
+        for item in candidates:
+            normalized = os.path.abspath(item)
+            key = os.path.normcase(normalized)
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(normalized)
+        return result
+
+    def _load_sponsor_qr_images(self):
+        preferred = (
+            ("微信", ("微信.jpg", "微信.png", "wechat.jpg", "wechat.png")),
+            ("支付宝", ("支付宝.jpg", "支付宝.png", "alipay.jpg", "alipay.png")),
+        )
+        found = []
+        for directory in self._sponsor_qr_directories():
+            if not os.path.isdir(directory):
+                continue
+            for label, names in preferred:
+                for name in names:
+                    path = os.path.join(directory, name)
+                    if os.path.exists(path):
+                        found.append((label, path))
+                        break
+            if found:
+                return found
+        return found
+
+    def show_sponsor_dialog(self):
+        self.sponsor_dialog = SponsorDialog(self._load_sponsor_qr_images(), self)
+        dialog = self.sponsor_dialog
+        dialog.move(self.geometry().center() - dialog.rect().center())
+        dialog.open()
+
+    def confirm_hide_sponsor_button(self):
+        self.sponsor_hide_dialog = SponsorHideDialog(self)
+        dialog = self.sponsor_hide_dialog
+
+        def apply_choice(result):
+            if result == QDialog.Accepted:
+                self.config["sponsor_button_hidden"] = True
+                self._save_config_silent()
+                title_bar = getattr(self, "title_bar", None)
+                if title_bar is not None:
+                    title_bar.sync_sponsor_visibility()
+                self._sync_sponsor_visibility_setting_button()
+                if hasattr(self, "_settings_saved_snapshot"):
+                    self._refresh_settings_saved_snapshot()
+                    self._set_settings_dirty(False)
+
+        dialog.finished.connect(apply_choice)
         dialog.move(self.geometry().center() - dialog.rect().center())
         dialog.open()
 
@@ -3559,6 +4033,14 @@ class AppWindow(QMainWindow):
             "auto_switch_to_log",
         )
         display_keys.append("auto_switch_to_log")
+        self.sponsor_button_visible_button = self._sponsor_visibility_settings_block(
+            display_layout,
+            "显示请喝咖啡入口",
+            "关闭标题栏赞助入口后，可在这里重新显示。该开关只影响标题栏入口，不影响自动钓鱼、鱼饵补给、记录和图鉴功能。",
+            not bool(self.config.get("sponsor_button_hidden", False)),
+            "sponsor_button_hidden",
+        )
+        display_keys.append("sponsor_button_hidden")
         self.debug_view_button = self._settings_toggle_block(
             display_layout,
             "调试溜鱼视图",
@@ -3955,6 +4437,45 @@ class AppWindow(QMainWindow):
         self._setting_widgets[key] = {"type": "toggle", "widget": button}
         return button
 
+    def _sponsor_visibility_settings_block(self, parent_layout, title, note, visible, key):
+        block = self._settings_panel()
+        layout = QHBoxLayout(block)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(14)
+
+        text_col = QVBoxLayout()
+        text_col.setSpacing(6)
+
+        title_label = QLabel(title)
+        title_label.setStyleSheet(
+            f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 16px; font-weight: 800;"
+        )
+        text_col.addWidget(title_label)
+
+        note_label = QLabel(note)
+        note_label.setWordWrap(True)
+        note_label.setStyleSheet(
+            f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 12px;"
+        )
+        text_col.addWidget(note_label)
+        layout.addLayout(text_col, 1)
+
+        button = QPushButton()
+        button.setCheckable(True)
+        button.setFocusPolicy(Qt.NoFocus)
+        button.setChecked(bool(visible))
+        button.setStyleSheet(secondary_button_stylesheet())
+        button.setMinimumWidth(86)
+        button.toggled.connect(
+            lambda is_checked, cfg_key=key, btn=button: self._update_sponsor_visibility_value(btn, cfg_key, is_checked)
+        )
+        self._update_sponsor_visibility_value(button, key, bool(visible))
+        layout.addWidget(button)
+
+        parent_layout.addWidget(block)
+        self._setting_widgets[key] = {"type": "inverse_toggle", "widget": button}
+        return button
+
     def _format_slider_label(self, value, display_scale=1.0, display_suffix="", display_decimals=0):
         display_value = float(value) * float(display_scale)
         if int(display_decimals) <= 0:
@@ -3990,6 +4511,25 @@ class AppWindow(QMainWindow):
         self.config[key] = bool(checked)
         button.setText("已开启" if checked else "已关闭")
         self._mark_settings_dirty()
+
+    def _update_sponsor_visibility_value(self, button, key, checked):
+        visible = bool(checked)
+        self.config[key] = not visible
+        button.setText("已显示" if visible else "已隐藏")
+        title_bar = getattr(self, "title_bar", None)
+        if title_bar is not None:
+            title_bar.sync_sponsor_visibility()
+        self._mark_settings_dirty()
+
+    def _sync_sponsor_visibility_setting_button(self):
+        button = getattr(self, "sponsor_button_visible_button", None)
+        if button is None:
+            return
+        visible = not bool(self.config.get("sponsor_button_hidden", False))
+        was_blocked = button.blockSignals(True)
+        button.setChecked(visible)
+        button.setText("已显示" if visible else "已隐藏")
+        button.blockSignals(was_blocked)
 
     def _mark_settings_dirty(self):
         if getattr(self, "_settings_building", False):
@@ -4081,6 +4621,14 @@ class AppWindow(QMainWindow):
                     button.setChecked(target)
                 else:
                     self.config[key] = target
+            elif widget_info["type"] == "inverse_toggle":
+                button = widget_info["widget"]
+                target = not bool(default_value)
+                if button.isChecked() != target:
+                    changed = True
+                    button.setChecked(target)
+                else:
+                    self.config[key] = not target
         if changed:
             self._mark_settings_dirty()
             self.show_toast("已恢复当前分类推荐值，请保存应用", "info")
@@ -4092,6 +4640,9 @@ class AppWindow(QMainWindow):
         if self.save_config():
             if getattr(self, "_agreement_shown", False) and self.update_info is None:
                 self._schedule_update_check(initial=False)
+            title_bar = getattr(self, "title_bar", None)
+            if title_bar is not None:
+                title_bar.sync_sponsor_visibility()
             self._refresh_settings_saved_snapshot()
             self._set_settings_dirty(False)
             self.show_toast("高级设置已保存并应用", "success")

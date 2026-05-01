@@ -18,6 +18,19 @@ class FakeCapture:
         return self.image.copy()
 
 
+class RelativeImageCapture:
+    def __init__(self, image):
+        self.image = image
+
+    def capture_relative(self, rect, rx, ry, rw, rh):
+        height, width = self.image.shape[:2]
+        x1 = max(0, min(width, int(round(width * float(rx)))))
+        y1 = max(0, min(height, int(round(height * float(ry)))))
+        x2 = max(0, min(width, int(round(width * float(rx + rw)))))
+        y2 = max(0, min(height, int(round(height * float(ry + rh)))))
+        return self.image[y1:y2, x1:x2].copy()
+
+
 class FakeVision:
     def __init__(self, matches):
         self.matches = matches
@@ -125,6 +138,9 @@ class CastShortageMachine(StateMachine):
             return {"text": "需要装备鱼饵才可以钓鱼"}
         return None
 
+    def _bait_shortage_context_allows_purchase(self, rect):
+        return True
+
 
 class BannerShortageMachine(StateMachine):
     def __init__(self, image, text_info=None, text_candidates=None):
@@ -189,6 +205,9 @@ class WaitingRecastVisualShortageMachine(StateMachine):
         if kwargs.get("allow_visual_fallback"):
             return {"source": "banner-visual"}
         return None
+
+    def _bait_shortage_context_allows_purchase(self, rect):
+        return True
 
     def _send_cast_input(self, ready_info, source_label):
         self.recast_sent = True
@@ -391,6 +410,7 @@ class VerifiedClickedNoisyDetailFlowMachine(CachedWrongDetailFlowMachine):
             "source": "full+name+currency",
             "confidence": 0.98,
             "visual_card_confirmed": True,
+            "visual_confirm_reason": "full-gray-same-card-currency",
         }
 
     def _click_template_in_rois(self, rect, templates, rois, label, threshold=0.66):
@@ -524,7 +544,8 @@ class BaitPurchaseFlowTest(unittest.TestCase):
 
         self.assertIsNotNone(result)
         self.assertEqual(result.get("source"), "full+name+currency")
-        self.assertEqual(result.get("text"), "LCTLCTLCT")
+        self.assertEqual(result.get("text"), "visual-full-card")
+        self.assertTrue(result.get("visual_card_confirmed"))
 
     def test_detect_unlimited_bait_item_rejects_noisy_name_without_exact_full_card(self):
         machine = DirectBaitItemMachine(
@@ -629,6 +650,41 @@ class BaitPurchaseFlowTest(unittest.TestCase):
                 self.assertEqual(result.get("source"), "full+name+currency")
                 self.assertGreaterEqual(result.get("confidence", 0.0), 0.58)
 
+    def test_detect_unlimited_bait_item_finds_sub1080_and_2k_shop_screenshots(self):
+        import cv2
+
+        samples = [
+            Path("debug_bait_shop_fullscreen_20260501_040341.png"),
+            Path("debug_bait_shop_fullscreen_20260501_040355.png"),
+            Path("debug_bait_shop_fullscreen_20260501_040408.png"),
+            Path("debug_bait_shop_fullscreen_20260501_040611.png"),
+        ]
+        existing = [path for path in samples if path.exists()]
+        if not existing:
+            self.skipTest("缺少本地鱼饵商店回归截图")
+
+        for image_path in existing:
+            with self.subTest(image=image_path.name):
+                image = cv2.imdecode(np.fromfile(str(image_path), dtype=np.uint8), cv2.IMREAD_COLOR)
+                self.assertIsNotNone(image)
+                machine = StateMachine(config={})
+                machine.sc = RelativeImageCapture(image)
+                machine._read_bait_item_name_texts = lambda _image: [("noise", 0.20)]
+
+                result = machine._detect_unlimited_bait_item((0, 0, image.shape[1], image.shape[0]))
+
+                self.assertIsNotNone(result)
+                self.assertEqual(result.get("source"), "full+name+currency")
+                self.assertTrue(result.get("visual_card_confirmed"))
+                self.assertEqual(result.get("visual_confirm_reason"), "full-gray-same-card-currency")
+                self.assertEqual(result.get("text"), "visual-full-card")
+                click_ratio = result.get("click_ratio")
+                self.assertIsNotNone(click_ratio)
+                self.assertGreater(click_ratio[0], 0.15)
+                self.assertLess(click_ratio[0], 0.22)
+                self.assertGreater(click_ratio[1], 0.18)
+                self.assertLess(click_ratio[1], 0.27)
+
     def test_bait_detail_cost_marker_accepts_actual_template(self):
         import cv2
         from pathlib import Path
@@ -684,9 +740,48 @@ class BaitPurchaseFlowTest(unittest.TestCase):
             cost_info={"source": "detail-cost", "confidence": 0.94},
             text_info={"text": "AM大M4学业路T氏", "candidates": []},
         )
-        item_info = {"source": "full+name+currency", "confidence": 0.98, "visual_card_confirmed": True}
+        item_info = {
+            "source": "full+name+currency",
+            "confidence": 0.98,
+            "visual_card_confirmed": True,
+            "visual_confirm_reason": "full-gray-same-card-currency",
+        }
 
         result = machine._detect_bait_detail_ready_after_verified_click((0, 0, 1920, 1080), item_info)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.get("source"), "detail-verified-after-click")
+
+    def test_bait_detail_after_verified_click_accepts_scaled_card_confidence(self):
+        machine = DetailIdentityMachine(
+            cost_info={"source": "detail-cost", "confidence": 0.96},
+            text_info={"text": "a大大m送4送4AMNA4大", "candidates": []},
+        )
+        item_info = {
+            "source": "full+name+currency",
+            "confidence": 0.93,
+            "visual_card_confirmed": True,
+            "visual_confirm_reason": "full-gray-same-card-currency",
+        }
+
+        result = machine._detect_bait_detail_ready_after_verified_click((0, 0, 1600, 900), item_info)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.get("source"), "detail-verified-after-click")
+
+    def test_bait_detail_after_verified_click_accepts_debug_low_card_confidence(self):
+        machine = DetailIdentityMachine(
+            cost_info={"source": "detail-cost", "confidence": 0.9453},
+            text_info={"text": "AAA大M4:437M4Ao0氏学业Td", "candidates": []},
+        )
+        item_info = {
+            "source": "full+name+currency",
+            "confidence": 0.8428,
+            "visual_card_confirmed": True,
+            "visual_confirm_reason": "full-gray-same-card-currency",
+        }
+
+        result = machine._detect_bait_detail_ready_after_verified_click((103, 224, 1920, 1080), item_info)
 
         self.assertIsNotNone(result)
         self.assertEqual(result.get("source"), "detail-verified-after-click")
@@ -697,6 +792,22 @@ class BaitPurchaseFlowTest(unittest.TestCase):
             text_info={"text": "AM大M4学业路T氏", "candidates": []},
         )
         item_info = {"source": "name+currency", "confidence": 0.98, "visual_card_confirmed": False}
+
+        result = machine._detect_bait_detail_ready_after_verified_click((0, 0, 1920, 1080), item_info)
+
+        self.assertIsNone(result)
+
+    def test_bait_detail_after_click_rejects_untrusted_visual_reason(self):
+        machine = DetailIdentityMachine(
+            cost_info={"source": "detail-cost", "confidence": 0.96},
+            text_info={"text": "AM大M4学业路T氏", "candidates": []},
+        )
+        item_info = {
+            "source": "full+name+currency",
+            "confidence": 0.96,
+            "visual_card_confirmed": True,
+            "visual_confirm_reason": "visual_confidence_low",
+        }
 
         result = machine._detect_bait_detail_ready_after_verified_click((0, 0, 1920, 1080), item_info)
 
@@ -791,6 +902,23 @@ class BaitPurchaseFlowTest(unittest.TestCase):
 
         self.assertIsNone(result)
 
+    def test_bait_confirm_dialog_accepts_title_layout_without_ocr(self):
+        image = np.full((520, 1300, 3), 30, dtype=np.uint8)
+        image[130:310, :] = (235, 235, 235)
+        image[360:430, 285:575] = (232, 232, 232)
+        image[360:430, 725:1015] = (232, 232, 232)
+
+        import cv2
+
+        cv2.putText(image, "TIP", (592, 88), cv2.FONT_HERSHEY_SIMPLEX, 1.4, (245, 245, 245), 4, cv2.LINE_AA)
+        machine = ConfirmDialogMachine(image, text_info=None)
+
+        result = machine._detect_bait_confirm_dialog((0, 0, 1920, 1080))
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.get("source"), "confirm-visual")
+        self.assertTrue(result.get("has_title_band"))
+
     def test_bait_confirm_dialog_keeps_ocr_fallback(self):
         image = np.full((520, 1300, 3), 30, dtype=np.uint8)
         machine = ConfirmDialogMachine(image, text_info={"text": "是否花费495鱼鳞币购买99个万能鱼饵", "candidates": []})
@@ -871,7 +999,7 @@ class BaitPurchaseFlowTest(unittest.TestCase):
         self.assertEqual(machine._bait_purchase_batches_target, 2)
         self.assertTrue(any(100.28 <= item <= 100.70 for item in machine.check_times))
 
-    def test_cast_animation_wait_uses_visual_fallback_when_ocr_misses_bait_prompt(self):
+    def test_cast_animation_wait_accepts_strict_visual_bait_prompt(self):
         machine = CastVisualFallbackMachine()
 
         import core.state_machine as state_machine_module
@@ -887,7 +1015,7 @@ class BaitPurchaseFlowTest(unittest.TestCase):
         self.assertEqual(machine.current_state, machine.STATE_BUYING_BAIT)
         self.assertTrue(any(item[1].get("allow_visual_fallback") for item in machine.check_times))
 
-    def test_waiting_recast_checks_bait_prompt_before_sending_f_again(self):
+    def test_waiting_recast_enters_purchase_on_visual_bait_prompt(self):
         machine = WaitingRecastVisualShortageMachine()
 
         import core.state_machine as state_machine_module
@@ -989,6 +1117,21 @@ class BaitPurchaseFlowTest(unittest.TestCase):
 
         self.assertIsNone(info)
         self.assertEqual(machine.ocr_term_checks, 0)
+
+    def test_bait_shortage_context_rejects_active_fishing_fullscreen(self):
+        import cv2
+
+        image_path = Path("debug_bait_shop_fullscreen_20260501_031809.png")
+        if not image_path.exists():
+            self.skipTest("缺少本地钓鱼状态负样本截图")
+        image = cv2.imdecode(np.fromfile(str(image_path), dtype=np.uint8), cv2.IMREAD_COLOR)
+        self.assertIsNotNone(image)
+        machine = StateMachine(config={"auto_buy_bait_amount": 99})
+        machine.sc = RelativeImageCapture(image)
+
+        allowed = machine._bait_shortage_context_allows_purchase((0, 0, image.shape[1], image.shape[0]))
+
+        self.assertFalse(allowed)
 
     def test_cast_short_window_skips_ocr_when_banner_is_absent(self):
         image = np.full((240, 900, 3), 118, dtype=np.uint8)

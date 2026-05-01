@@ -1106,17 +1106,28 @@ class StateMachine:
     def _bait_shortage_visual_fallback_info(self, rect, banner_info):
         if not banner_info:
             return None
-        if float(banner_info.get("confidence", 0.0) or 0.0) < 0.56:
+        confidence = float(banner_info.get("confidence", 0.0) or 0.0)
+        bright_ratio = float(banner_info.get("bright_ratio", 0.0) or 0.0)
+        edge_ratio = float(banner_info.get("edge_ratio", 0.0) or 0.0)
+        if confidence < 0.72:
+            return None
+        if bright_ratio < 0.030 or edge_ratio < 0.012:
             return None
 
         initial_cluster = self._detect_initial_control_cluster(rect)
         if initial_cluster.get("count", 0) >= 2 and initial_cluster.get("valid"):
-            return {"source": "banner-visual", "initial_controls": initial_cluster}
-
-        f_info = self._detect_initial_f_prompt_quick(rect, threshold=0.88)
-        if f_info and f_info.get("location"):
-            return {"source": "banner-visual", "initial_controls": initial_cluster, "f_prompt": f_info}
+            return {
+                "source": "banner-visual",
+                "initial_controls": initial_cluster,
+                "confidence": confidence,
+                "bright_ratio": bright_ratio,
+                "edge_ratio": edge_ratio,
+            }
         return None
+
+    def _bait_shortage_context_allows_purchase(self, rect):
+        initial_cluster = self._detect_initial_control_cluster(rect)
+        return bool(initial_cluster.get("valid") and initial_cluster.get("count", 0) >= 2)
 
     def _detect_bait_shortage_prompt(self, rect, allow_ocr=True, require_visual_hint=False, allow_visual_fallback=False):
         banner_info = self._detect_center_text_banner_in_rois(
@@ -1168,16 +1179,16 @@ class StateMachine:
             return []
 
         strategies = (
-            {"name": "full-gray-mask", "threshold": 0.74, "use_mask": True, "mask_threshold": 5, "scale_steps": 9},
-            {"name": "full-gray", "threshold": 0.78, "use_mask": False, "scale_steps": 9},
-            {"name": "full-edge", "threshold": 0.64, "use_edge": True, "use_mask": False, "scale_steps": 9},
+            {"name": "full-gray", "threshold": 0.58, "use_mask": False, "scale_steps": 13, "priority": 3},
+            {"name": "full-edge", "threshold": 0.64, "use_edge": True, "use_mask": False, "scale_steps": 9, "priority": 2},
+            {"name": "full-gray-mask", "threshold": 0.74, "use_mask": True, "mask_threshold": 5, "scale_steps": 9, "priority": 1},
         )
         min_distance = max(36, int(min(shop_img.shape[:2]) * 0.070))
         scale_range = self._bait_full_item_scale_range(rect)
         matches = []
         for template in self._unlimited_bait_full_item_templates():
             for strategy in strategies:
-                params = {key: value for key, value in strategy.items() if key not in {"name", "threshold", "scale_steps"}}
+                params = {key: value for key, value in strategy.items() if key not in {"name", "threshold", "scale_steps", "priority"}}
                 for match in self.vis.find_template_matches(
                     shop_img,
                     template,
@@ -1190,10 +1201,11 @@ class StateMachine:
                 ):
                     item = dict(match)
                     item["strategy"] = strategy["name"]
+                    item["strategy_priority"] = int(strategy.get("priority", 0))
                     matches.append(item)
 
         deduped = []
-        for item in sorted(matches, key=lambda value: value.get("confidence", 0.0), reverse=True):
+        for item in sorted(matches, key=lambda value: (value.get("strategy_priority", 0), value.get("confidence", 0.0)), reverse=True):
             loc = item.get("location")
             if not loc:
                 continue
@@ -1331,6 +1343,45 @@ class StateMachine:
                 return item
         return None
 
+    def _bait_visual_card_confirmation(self, regions, currency_item, full_item):
+        if not full_item or not regions or not currency_item:
+            return False, ""
+        card = regions.get("card")
+        currency_region = regions.get("currency")
+        loc = currency_item.get("location")
+        if not card or not currency_region or not self._point_in_region(loc, currency_region, margin=4):
+            return False, "currency_outside_region"
+
+        x1, y1, x2, y2 = card
+        card_w = max(1, int(x2 - x1))
+        card_h = max(1, int(y2 - y1))
+        cur_x, cur_y = loc
+        if cur_y < y1 + card_h * 0.68 or cur_y > y2 + card_h * 0.04:
+            return False, "currency_bad_vertical"
+
+        cur_w, cur_h = currency_item.get("size") or (0, 0)
+        try:
+            cur_w = int(cur_w)
+            cur_h = int(cur_h)
+        except (TypeError, ValueError):
+            cur_w = 0
+            cur_h = 0
+        if cur_w <= 0 or cur_h <= 0 or cur_w > card_w * 0.62 or cur_h > card_h * 0.32:
+            return False, "currency_bad_size"
+        if cur_x < x1 + card_w * 0.12 or cur_x > x2 - card_w * 0.10:
+            return False, "currency_bad_horizontal"
+
+        full_confidence = float(full_item.get("confidence", 0.0) or 0.0)
+        currency_confidence = float(currency_item.get("confidence", 0.0) or 0.0)
+        strategy = str(full_item.get("strategy") or "")
+        if strategy == "full-gray" and full_confidence >= 0.58 and currency_confidence >= 0.90:
+            return True, "full-gray-same-card-currency"
+        if strategy == "full-edge" and full_confidence >= 0.68 and currency_confidence >= 0.92:
+            return True, "full-edge-same-card-currency"
+        if full_confidence >= 0.96 and currency_confidence >= 0.96:
+            return True, "high-confidence-same-card-currency"
+        return False, "visual_confidence_low"
+
     def _verify_unlimited_bait_item_card(self, shop_roi, shop_img, regions, currency_item, full_item=None, debug_records=None, debug_source=""):
         if shop_img is None or shop_img.size == 0 or not regions or not currency_item:
             return None
@@ -1350,7 +1401,7 @@ class StateMachine:
         )
         currency_confidence = float(currency_item.get("confidence", 0.0) or 0.0)
         full_confidence = float((full_item or {}).get("confidence", 0.0) or 0.0)
-        visual_card_confirmed = bool(full_item) and full_confidence >= 0.96 and currency_confidence >= 0.96
+        visual_card_confirmed, visual_confirm_reason = self._bait_visual_card_confirmation(regions, currency_item, full_item)
         record = None
         if debug_records is not None:
             record = {
@@ -1363,13 +1414,14 @@ class StateMachine:
                 "name_confirmed": bool(name_confirmed),
                 "conflicting_name": bool(conflicting_name),
                 "visual_card_confirmed": bool(visual_card_confirmed),
+                "visual_confirm_reason": visual_confirm_reason,
                 "accepted": False,
                 "reject_reason": "",
             }
             debug_records.append(record)
         if visual_card_confirmed and not name_confirmed:
             name_confirmed = True
-            combined = combined or "visual-full-card"
+            combined = "visual-full-card"
             if record is not None:
                 record["name_confirmed"] = True
                 record["combined"] = combined
@@ -1411,6 +1463,7 @@ class StateMachine:
             "strategy": strategy,
             "source": source,
             "visual_card_confirmed": bool(visual_card_confirmed),
+            "visual_confirm_reason": visual_confirm_reason,
         }
 
     def _debug_output_dir(self):
@@ -1563,6 +1616,7 @@ class StateMachine:
                 f"full_loc={full_item.get('location')} full_conf={float(full_item.get('confidence', 0.0) or 0.0):.4f} "
                 f"name_confirmed={record.get('name_confirmed')} conflicting={record.get('conflicting_name')} "
                 f"visual_card_confirmed={record.get('visual_card_confirmed')} "
+                f"visual_reason={record.get('visual_confirm_reason') or ''} "
                 f"combined={record.get('combined')} texts={text_items}"
             )
 
@@ -1679,7 +1733,16 @@ class StateMachine:
             return False
         if item_info.get("source") != "full+name+currency":
             return False
-        return float(item_info.get("confidence", 0.0) or 0.0) >= 0.96
+        reason = str(item_info.get("visual_confirm_reason") or "")
+        min_conf_by_reason = {
+            "full-gray-same-card-currency": 0.80,
+            "full-edge-same-card-currency": 0.82,
+            "high-confidence-same-card-currency": 0.88,
+        }
+        min_conf = min_conf_by_reason.get(reason)
+        if min_conf is None:
+            return False
+        return float(item_info.get("confidence", 0.0) or 0.0) >= min_conf
 
     def _detect_bait_detail_ready_after_verified_click(self, rect, item_info):
         detail_info = self._detect_bait_detail_ready(rect)
@@ -1690,7 +1753,9 @@ class StateMachine:
         cost_info = self._detect_bait_detail_cost_marker(rect)
         if not cost_info:
             return None
-        if float(cost_info.get("confidence", 0.0) or 0.0) < 0.84:
+        item_confidence = float((item_info or {}).get("confidence", 0.0) or 0.0)
+        required_cost_confidence = 0.88 if item_confidence < 0.88 else 0.84
+        if float(cost_info.get("confidence", 0.0) or 0.0) < required_cost_confidence:
             return None
         ready_info = dict(cost_info)
         ready_info["source"] = "detail-verified-after-click"
@@ -1700,6 +1765,43 @@ class StateMachine:
             "text": getattr(self, "_last_bait_detail_identity_text", "") or "",
         }
         return ready_info
+
+    def _save_bait_detail_debug_snapshot(self, rect, item_info=None, reason="detail_verify_failed"):
+        if not self.config.get("bait_shop_debug_mode", False):
+            return None
+        if self.sc is None or not rect:
+            return None
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        output_dir = self._debug_output_dir()
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            return None
+
+        image_path = output_dir / f"debug_bait_detail_{timestamp}.png"
+        details_path = output_dir / f"debug_bait_detail_{timestamp}.txt"
+        try:
+            image = self.sc.capture_relative(rect, 0.60, 0.10, 0.40, 0.88)
+        except Exception:
+            image = None
+        saved = self._write_debug_image(image_path, image)
+
+        lines = [
+            f"reason={reason}",
+            f"time={timestamp}",
+            f"client_rect={rect}",
+            f"item_info={item_info or {}}",
+            f"last_detail_cost_confidence={float(getattr(self, '_last_bait_detail_cost_best_confidence', 0.0) or 0.0):.4f}",
+            f"last_detail_identity_text={getattr(self, '_last_bait_detail_identity_text', '') or ''}",
+        ]
+        try:
+            details_path.write_text("\n".join(lines), encoding="utf-8")
+        except Exception:
+            details_path = None
+
+        if not saved and details_path is None:
+            return None
+        return {"image": str(image_path) if saved else "", "details": str(details_path) if details_path else ""}
 
     def _detect_bait_detail_cost_marker(self, rect):
         if self.sc is None or not rect:
@@ -1810,6 +1912,41 @@ class StateMachine:
         info["source"] = "confirm-ocr"
         return info
 
+    def _save_bait_confirm_debug_snapshot(self, rect, reason="confirm_verify_failed"):
+        if not self.config.get("bait_shop_debug_mode", False):
+            return None
+        if self.sc is None or not rect:
+            return None
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        output_dir = self._debug_output_dir()
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            return None
+
+        image_path = output_dir / f"debug_bait_confirm_{timestamp}.png"
+        details_path = output_dir / f"debug_bait_confirm_{timestamp}.txt"
+        try:
+            image = self.sc.capture_relative(rect, 0.10, 0.28, 0.80, 0.52)
+        except Exception:
+            image = None
+        saved = self._write_debug_image(image_path, image)
+
+        lines = [
+            f"reason={reason}",
+            f"time={timestamp}",
+            f"client_rect={rect}",
+            f"last_confirm_visual_confidence={float(getattr(self, '_last_bait_confirm_dialog_best_confidence', 0.0) or 0.0):.4f}",
+        ]
+        try:
+            details_path.write_text("\n".join(lines), encoding="utf-8")
+        except Exception:
+            details_path = None
+
+        if not saved and details_path is None:
+            return None
+        return {"image": str(image_path) if saved else "", "details": str(details_path) if details_path else ""}
+
     def _detect_bait_confirm_dialog_visual(self, rect):
         if self.sc is None or not rect:
             return None
@@ -1879,8 +2016,16 @@ class StateMachine:
         center_mask[:, int(width * 0.24):int(width * 0.76)] = True
         red = center_mask & (((hue <= 10) | (hue >= 168)) & (sat >= 45) & (val >= 115))
         red_ratio = float(np.mean(red))
-        if red_ratio < 0.0010:
-            return None
+
+        title_y1 = max(0, int(body[0] - height * 0.24))
+        title_y2 = max(title_y1, int(body[0] - 2))
+        has_title_band = False
+        if title_y2 > title_y1:
+            title_region = gray[title_y1:title_y2, :]
+            center_title = title_region[:, int(width * 0.35):int(width * 0.65)]
+            dark_ratio = float(np.mean(title_region <= 64))
+            title_bright_ratio = float(np.mean(center_title >= 165)) if center_title.size else 0.0
+            has_title_band = dark_ratio >= 0.42 and title_bright_ratio >= 0.0035
 
         button_region_y1 = max(body[1], int(height * 0.58))
         button_region_y2 = min(height, int(height * 0.94))
@@ -1900,16 +2045,20 @@ class StateMachine:
             buttons.append((x, y + button_region_y1, w, h))
         if len(buttons) < 2:
             return None
+        if red_ratio < 0.0010 and not has_title_band:
+            return None
         buttons.sort(key=lambda item: item[0])
         confirm_button = buttons[-1]
         click = (int(confirm_button[0] + confirm_button[2] / 2), int(confirm_button[1] + confirm_button[3] / 2))
-        confidence = min(0.99, 0.62 + red_ratio * 18.0 + min(0.18, len(buttons) * 0.04))
+        confidence = min(0.99, 0.60 + red_ratio * 18.0 + (0.14 if has_title_band else 0.0) + min(0.18, len(buttons) * 0.04))
         return {
             "source": "confirm-visual",
             "confidence": confidence,
             "body": body,
             "buttons": buttons,
             "click": click,
+            "red_ratio": red_ratio,
+            "has_title_band": has_title_band,
         }
 
     def _detect_bait_reward_popup(self, rect):
@@ -1998,6 +2147,8 @@ class StateMachine:
             allow_visual_fallback=True,
         )
         if not shortage_info:
+            return False
+        if not self._bait_shortage_context_allows_purchase(current_rect):
             return False
         return self._start_bait_purchase_flow(current_rect, shortage_info)
 
@@ -2100,6 +2251,9 @@ class StateMachine:
                     interval=0.25,
                 )
             if not detail_info:
+                debug_paths = self._save_bait_detail_debug_snapshot(current_rect, item_info, reason="detail_after_click_failed")
+                if debug_paths:
+                    self._log(f"[排错] 已保存鱼饵详情调试图: {debug_paths.get('image') or '未生成'}；明细: {debug_paths.get('details') or '未生成'}")
                 best_cost_conf = float(getattr(self, "_last_bait_detail_cost_best_confidence", 0.0) or 0.0)
                 identity_text = getattr(self, "_last_bait_detail_identity_text", "") or "未识别"
                 self._log(f"[鱼饵] 未能确认无上限万能鱼饵商品详情，停止本次自动购买。最高详情消耗特征置信度: {best_cost_conf:.2f}，详情文字: {identity_text}")
@@ -2122,6 +2276,9 @@ class StateMachine:
 
             confirm_info = self._wait_for_bait_condition(current_rect, self._detect_bait_confirm_dialog, timeout=3.5, interval=0.25)
             if not confirm_info:
+                debug_paths = self._save_bait_confirm_debug_snapshot(current_rect, reason="confirm_after_buy_failed")
+                if debug_paths:
+                    self._log(f"[排错] 已保存鱼饵购买确认调试图: {debug_paths.get('image') or '未生成'}；明细: {debug_paths.get('details') or '未生成'}")
                 best_confirm_conf = float(getattr(self, "_last_bait_confirm_dialog_best_confidence", 0.0) or 0.0)
                 self._log(f"[鱼饵] 未能确认 99 个万能鱼饵购买弹窗，停止本次自动购买。最高弹窗视觉置信度: {best_confirm_conf:.2f}")
                 return False
@@ -3443,7 +3600,7 @@ class StateMachine:
         if 0.25 <= since_cast <= 2.20 and now - getattr(self, "_bait_shortage_check_last", 0) >= 1.0:
             self._bait_shortage_check_last = now
             shortage_info = self._detect_bait_shortage_prompt(rect, require_visual_hint=True, allow_visual_fallback=True)
-            if shortage_info:
+            if shortage_info and self._bait_shortage_context_allows_purchase(rect):
                 self._start_bait_purchase_flow(rect, shortage_info)
                 return
 

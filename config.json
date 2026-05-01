@@ -28,5 +28,7 @@
     "log_line_limit": 800,
     "auto_switch_to_log": true,
     "debug_mode": true,
-    "bait_shop_debug_mode": true
+    "bait_shop_debug_mode": true,
+    "sponsor_button_hidden": false,
+    "sponsor_qr_dir": "sponsor_qr"
 }
