@@ -1735,7 +1735,7 @@ class StateMachine:
             return False
         reason = str(item_info.get("visual_confirm_reason") or "")
         min_conf_by_reason = {
-            "full-gray-same-card-currency": 0.80,
+            "full-gray-same-card-currency": 0.78,
             "full-edge-same-card-currency": 0.82,
             "high-confidence-same-card-currency": 0.88,
         }
@@ -1750,11 +1750,16 @@ class StateMachine:
             return detail_info
         if not self._item_info_allows_visual_detail_confirm(item_info):
             return None
-        cost_info = self._detect_bait_detail_cost_marker(rect)
+        cost_info = self._detect_bait_detail_cost_marker(rect, allow_high_confidence_fallback=True)
         if not cost_info:
             return None
         item_confidence = float((item_info or {}).get("confidence", 0.0) or 0.0)
-        required_cost_confidence = 0.88 if item_confidence < 0.88 else 0.84
+        if item_confidence < 0.80:
+            required_cost_confidence = 0.94
+        elif item_confidence < 0.88:
+            required_cost_confidence = 0.90
+        else:
+            required_cost_confidence = 0.84
         if float(cost_info.get("confidence", 0.0) or 0.0) < required_cost_confidence:
             return None
         ready_info = dict(cost_info)
@@ -1803,7 +1808,7 @@ class StateMachine:
             return None
         return {"image": str(image_path) if saved else "", "details": str(details_path) if details_path else ""}
 
-    def _detect_bait_detail_cost_marker(self, rect):
+    def _detect_bait_detail_cost_marker(self, rect, allow_high_confidence_fallback=False):
         if self.sc is None or not rect:
             return None
         best = None
@@ -1832,7 +1837,8 @@ class StateMachine:
             if best is None or conf > best.get("confidence", 0.0):
                 best = {"location": loc, "confidence": conf, "template": matched_path, "strategy": strategy, "roi": roi}
             if loc:
-                if not self._detail_cost_marker_has_expected_pixels(image, loc, rect, matched_path):
+                pixel_confirmed = self._detail_cost_marker_has_expected_pixels(image, loc, rect, matched_path)
+                if not pixel_confirmed and not (allow_high_confidence_fallback and conf >= 0.94):
                     continue
                 return {
                     "source": "detail-cost",
@@ -1841,6 +1847,7 @@ class StateMachine:
                     "template": matched_path,
                     "strategy": strategy,
                     "roi": roi,
+                    "pixel_confirmed": pixel_confirmed,
                 }
         self._last_bait_detail_cost_best_confidence = best.get("confidence", 0.0) if best else 0.0
         return None

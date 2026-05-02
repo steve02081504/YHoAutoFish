@@ -262,11 +262,42 @@ class DetailIdentityMachine(StateMachine):
         self.cost_info = cost_info
         self.text_info = text_info
 
-    def _detect_bait_detail_cost_marker(self, rect):
+    def _detect_bait_detail_cost_marker(self, rect, *args, **kwargs):
         return self.cost_info
 
     def _detect_text_terms_in_rois(self, *args, **kwargs):
         return self.text_info or {"text": "", "candidates": []}
+
+
+class DetailDebugCropCapture:
+    def __init__(self, image):
+        self.image = image
+        self.base_roi = (0.60, 0.10, 0.40, 0.88)
+
+    def capture_relative(self, rect, rx, ry, rw, rh):
+        height, width = self.image.shape[:2]
+        base_x, base_y, base_w, base_h = self.base_roi
+        x1_ratio = max(float(rx), base_x)
+        y1_ratio = max(float(ry), base_y)
+        x2_ratio = min(float(rx) + float(rw), base_x + base_w)
+        y2_ratio = min(float(ry) + float(rh), base_y + base_h)
+        if x2_ratio <= x1_ratio or y2_ratio <= y1_ratio:
+            return np.zeros((1, 1, 3), dtype=np.uint8)
+        x1 = max(0, min(width, int(round((x1_ratio - base_x) / base_w * width))))
+        y1 = max(0, min(height, int(round((y1_ratio - base_y) / base_h * height))))
+        x2 = max(0, min(width, int(round((x2_ratio - base_x) / base_w * width))))
+        y2 = max(0, min(height, int(round((y2_ratio - base_y) / base_h * height))))
+        return self.image[y1:y2, x1:x2].copy()
+
+
+class DetailDebugCropMachine(StateMachine):
+    def __init__(self, image, text):
+        super().__init__(config={})
+        self.sc = DetailDebugCropCapture(image)
+        self.text = text
+
+    def _detect_text_terms_in_rois(self, *args, **kwargs):
+        return {"text": self.text, "candidates": []}
 
 
 class ConfirmDialogMachine(StateMachine):
@@ -366,7 +397,7 @@ class CachedWrongDetailFlowMachine(StateMachine):
     def _detect_unlimited_bait_item(self, rect):
         return {"click_ratio": (0.22, 0.32), "source": "name+currency", "confidence": 0.92}
 
-    def _detect_bait_detail_cost_marker(self, rect):
+    def _detect_bait_detail_cost_marker(self, rect, *args, **kwargs):
         return {"source": "detail-cost", "confidence": 0.91}
 
     def _detect_text_terms_in_rois(self, *args, **kwargs):
@@ -782,6 +813,65 @@ class BaitPurchaseFlowTest(unittest.TestCase):
         }
 
         result = machine._detect_bait_detail_ready_after_verified_click((103, 224, 1920, 1080), item_info)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.get("source"), "detail-verified-after-click")
+
+    def test_bait_detail_after_verified_click_accepts_2k_low_card_confidence_with_strong_cost(self):
+        machine = DetailIdentityMachine(
+            cost_info={"source": "detail-cost", "confidence": 0.9609},
+            text_info={"text": "&“大大mnHA”m4zArmn:40务食", "candidates": []},
+        )
+        item_info = {
+            "source": "full+name+currency",
+            "confidence": 0.7934927046298981,
+            "visual_card_confirmed": True,
+            "visual_confirm_reason": "full-gray-same-card-currency",
+        }
+
+        result = machine._detect_bait_detail_ready_after_verified_click((0, 0, 2560, 1440), item_info)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.get("source"), "detail-verified-after-click")
+
+    def test_bait_detail_after_verified_click_accepts_1600_debug_detail_crop(self):
+        import cv2
+
+        image_path = Path("debug_bait_detail_20260502_042533.png")
+        if not image_path.exists():
+            self.skipTest("本地鱼饵详情调试图不存在")
+        image = cv2.imdecode(np.fromfile(str(image_path), dtype=np.uint8), cv2.IMREAD_COLOR)
+        self.assertIsNotNone(image)
+        machine = DetailDebugCropMachine(image, "am大大”送4送4MNA4大国#A4热线货生4S")
+        item_info = {
+            "source": "full+name+currency",
+            "confidence": 0.9297933280467987,
+            "visual_card_confirmed": True,
+            "visual_confirm_reason": "full-gray-same-card-currency",
+        }
+
+        result = machine._detect_bait_detail_ready_after_verified_click((563, 273, 1600, 900), item_info)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.get("source"), "detail-verified-after-click")
+
+    def test_bait_detail_after_verified_click_accepts_2k_debug_detail_crop(self):
+        import cv2
+
+        image_path = Path("debug_bait_detail_20260502_042843.png")
+        if not image_path.exists():
+            self.skipTest("本地鱼饵详情调试图不存在")
+        image = cv2.imdecode(np.fromfile(str(image_path), dtype=np.uint8), cv2.IMREAD_COLOR)
+        self.assertIsNotNone(image)
+        machine = DetailDebugCropMachine(image, "&“大大mnHA”m4zArmn:40务食")
+        item_info = {
+            "source": "full+name+currency",
+            "confidence": 0.7934927046298981,
+            "visual_card_confirmed": True,
+            "visual_confirm_reason": "full-gray-same-card-currency",
+        }
+
+        result = machine._detect_bait_detail_ready_after_verified_click((0, 0, 2560, 1440), item_info)
 
         self.assertIsNotNone(result)
         self.assertEqual(result.get("source"), "detail-verified-after-click")
