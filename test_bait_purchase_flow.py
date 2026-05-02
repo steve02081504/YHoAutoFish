@@ -43,9 +43,14 @@ class FakeController:
     def __init__(self):
         self.clicked = None
         self.released = False
+        self.keys = []
 
     def release_all(self):
         self.released = True
+
+    def key_tap(self, key, duration=0.01):
+        self.keys.append((key, float(duration)))
+        return True
 
     def mouse_click(self, x, y, duration=0.05):
         self.clicked = (int(x), int(y), float(duration))
@@ -170,6 +175,19 @@ class CastVisualFallbackMachine(CastShortageMachine):
     def _detect_bait_shortage_prompt(self, rect, *args, **kwargs):
         self.check_times.append((self.clock, dict(kwargs)))
         if self.clock >= 100.30 and kwargs.get("allow_visual_fallback"):
+            return {"source": "banner-visual"}
+        return None
+
+
+class SingleFrameCastVisualFallbackMachine(CastShortageMachine):
+    def __init__(self):
+        super().__init__()
+        self.visual_hits = 0
+
+    def _detect_bait_shortage_prompt(self, rect, *args, **kwargs):
+        self.check_times.append((self.clock, dict(kwargs)))
+        if self.clock >= 100.30 and kwargs.get("allow_visual_fallback") and self.visual_hits == 0:
+            self.visual_hits += 1
             return {"source": "banner-visual"}
         return None
 
@@ -362,8 +380,28 @@ class BuyingBaitHandleMachine(StateMachine):
         self._bait_purchase_exit_shop_sent = self.exit_shop_sent
         return False
 
-    def _enter_recovering(self, reason, record_empty=False, press_esc=False):
+    def _enter_recovering(self, reason, record_empty=False, press_esc=False, allow_second_esc=True):
         self.recovery_press_esc = press_esc
+        self.recovery_allow_second_esc = allow_second_esc
+
+
+class BaitPurchaseRecoveryEscMachine(StateMachine):
+    def __init__(self):
+        super().__init__(config={"recovery_timeout": 8})
+        self.is_running = True
+        self.ctrl = FakeController()
+
+        class Window:
+            def is_foreground(inner_self):
+                return False
+
+        self.wm = Window()
+
+    def _detect_ready_to_cast(self, *args, **kwargs):
+        return None
+
+    def _sleep_interruptible(self, seconds, step=0.05):
+        return True
 
 
 class CachedWrongDetailFlowMachine(StateMachine):
@@ -1071,6 +1109,27 @@ class BaitPurchaseFlowTest(unittest.TestCase):
         machine._handle_buying_bait((0, 0, 1920, 1080))
 
         self.assertTrue(machine.recovery_press_esc)
+        self.assertFalse(machine.recovery_allow_second_esc)
+
+    def test_bait_purchase_recovery_never_sends_second_esc(self):
+        machine = BaitPurchaseRecoveryEscMachine()
+        machine._enter_recovering("自动购买鱼饵未完成", press_esc=True, allow_second_esc=False)
+        machine._recovery_start_time = 100.0
+
+        import core.state_machine as state_machine_module
+
+        current_time = 100.0
+        original_time = state_machine_module.time.time
+        state_machine_module.time.time = lambda: current_time
+        try:
+            machine._handle_recovering((0, 0, 1920, 1080))
+            current_time = 104.0
+            machine._handle_recovering((0, 0, 1920, 1080))
+        finally:
+            state_machine_module.time.time = original_time
+
+        esc_keys = [item for item in machine.ctrl.keys if item[0] == "esc"]
+        self.assertEqual(len(esc_keys), 1)
 
     def test_cast_animation_wait_polls_short_lived_bait_prompt(self):
         machine = CastShortageMachine()
@@ -1089,7 +1148,24 @@ class BaitPurchaseFlowTest(unittest.TestCase):
         self.assertEqual(machine._bait_purchase_batches_target, 2)
         self.assertTrue(any(100.28 <= item <= 100.70 for item in machine.check_times))
 
-    def test_cast_animation_wait_accepts_strict_visual_bait_prompt(self):
+    def test_cast_animation_wait_rejects_visual_only_bait_prompt(self):
+        machine = SingleFrameCastVisualFallbackMachine()
+
+        import core.state_machine as state_machine_module
+
+        original_time = state_machine_module.time.time
+        state_machine_module.time.time = lambda: machine.clock
+        try:
+            handled = machine._wait_after_cast_or_bait_shortage((0, 0, 1920, 1080), 2.0)
+        finally:
+            state_machine_module.time.time = original_time
+
+        self.assertFalse(handled)
+        self.assertEqual(machine.current_state, machine.STATE_WAITING)
+        self.assertEqual(machine.visual_hits, 1)
+        self.assertTrue(any(item[1].get("allow_visual_fallback") for item in machine.check_times))
+
+    def test_cast_animation_wait_accepts_confirmed_visual_bait_prompt(self):
         machine = CastVisualFallbackMachine()
 
         import core.state_machine as state_machine_module
@@ -1105,7 +1181,7 @@ class BaitPurchaseFlowTest(unittest.TestCase):
         self.assertEqual(machine.current_state, machine.STATE_BUYING_BAIT)
         self.assertTrue(any(item[1].get("allow_visual_fallback") for item in machine.check_times))
 
-    def test_waiting_recast_enters_purchase_on_visual_bait_prompt(self):
+    def test_waiting_recast_does_not_enter_purchase_on_visual_only_prompt(self):
         machine = WaitingRecastVisualShortageMachine()
 
         import core.state_machine as state_machine_module
@@ -1117,8 +1193,8 @@ class BaitPurchaseFlowTest(unittest.TestCase):
         finally:
             state_machine_module.time.time = original_time
 
-        self.assertEqual(machine.current_state, machine.STATE_BUYING_BAIT)
-        self.assertFalse(machine.recast_sent)
+        self.assertEqual(machine.current_state, machine.STATE_WAITING)
+        self.assertTrue(machine.recast_sent)
 
     def test_bait_shortage_prompt_accepts_center_banner_with_ocr_terms(self):
         image = np.full((240, 900, 3), 118, dtype=np.uint8)

@@ -428,6 +428,11 @@ class StateMachine:
             value = default
         return max(minimum, min(value, maximum))
 
+    def _reset_bait_shortage_visual_confirmation(self):
+        self._bait_shortage_visual_seen_count = 0
+        self._bait_shortage_visual_seen_time = 0.0
+        self._bait_shortage_visual_signature = ""
+
     def _reset_round_state(self, release_keys=True):
         if release_keys:
             self.ctrl.release_all()
@@ -437,6 +442,7 @@ class StateMachine:
         self._waiting_recast_count = 0
         self._waiting_ready_recheck_last = 0
         self._bait_shortage_check_last = 0
+        self._reset_bait_shortage_visual_confirmation()
         self._fishing_start_time = 0
         self.fishing_start_time = 0
         self._missing_start_time = 0
@@ -490,6 +496,7 @@ class StateMachine:
         self._recovery_esc_requested = False
         self._recovery_esc_sent = False
         self._recovery_second_esc_sent = False
+        self._recovery_allow_second_esc = True
         self._recovery_empty_recorded = False
         self._bait_purchase_batches_target = 0
         self._bait_purchase_batches_done = 0
@@ -853,6 +860,7 @@ class StateMachine:
             self._last_cast_time = time.time()
             self._waiting_start_time = self._last_cast_time
             self._bait_shortage_check_last = 0
+            self._reset_bait_shortage_visual_confirmation()
             return True
 
     def _normalized_auto_buy_bait_amount(self):
@@ -1138,17 +1146,16 @@ class StateMachine:
                 (0.04, 0.40, 0.92, 0.24),
             ),
         )
-        if not allow_ocr:
-            return None
         if require_visual_hint and not banner_info:
             return None
         if not banner_info:
             return None
 
-        text_info = self._detect_bait_shortage_text_for_banner(rect, banner_info)
-        if text_info:
-            text_info["banner"] = banner_info
-            return text_info
+        if allow_ocr:
+            text_info = self._detect_bait_shortage_text_for_banner(rect, banner_info)
+            if text_info:
+                text_info["banner"] = banner_info
+                return text_info
         if allow_visual_fallback:
             visual_info = self._bait_shortage_visual_fallback_info(rect, banner_info)
             if visual_info:
@@ -2145,17 +2152,80 @@ class StateMachine:
         self._log(f"[鱼饵] 检测到鱼饵不足，准备自动购买 {batches * 99} 个万能鱼饵，共 {batches} 次。")
         return True
 
+    def _bait_shortage_visual_candidate_signature(self, info):
+        banner = (info or {}).get("banner") or {}
+        band = banner.get("band") or ()
+        roi = banner.get("roi") or ()
+        if len(band) >= 4:
+            try:
+                _, y, _, h = band[:4]
+                return f"band:{int(round(float(y) / 12.0))}:{int(round(float(h) / 8.0))}"
+            except (TypeError, ValueError):
+                pass
+        if len(roi) >= 4:
+            try:
+                x, y, w, h = roi[:4]
+                return (
+                    f"roi:{int(round(float(x) * 100))}:"
+                    f"{int(round(float(y) * 100))}:"
+                    f"{int(round(float(w) * 100))}:"
+                    f"{int(round(float(h) * 100))}"
+                )
+            except (TypeError, ValueError):
+                pass
+        return str((info or {}).get("source") or "visual")
+
+    def _confirm_bait_shortage_visual_candidate(self, info):
+        if not info or info.get("source") != "banner-visual":
+            self._reset_bait_shortage_visual_confirmation()
+            return None
+        now = time.time()
+        signature = self._bait_shortage_visual_candidate_signature(info)
+        previous_signature = getattr(self, "_bait_shortage_visual_signature", "")
+        previous_time = float(getattr(self, "_bait_shortage_visual_seen_time", 0.0) or 0.0)
+        previous_count = int(getattr(self, "_bait_shortage_visual_seen_count", 0) or 0)
+        if signature == previous_signature and previous_time > 0 and now - previous_time <= 0.85:
+            count = previous_count + 1
+        else:
+            count = 1
+        self._bait_shortage_visual_seen_count = count
+        self._bait_shortage_visual_seen_time = now
+        self._bait_shortage_visual_signature = signature
+        if count < 2:
+            return None
+        confirmed = dict(info)
+        confirmed["source"] = "banner-visual-confirmed"
+        confirmed["visual_confirm_count"] = count
+        return confirmed
+
     def _check_bait_shortage_after_cast(self, rect):
         current_rect = self.wm.get_client_rect() or rect
         shortage_info = self._detect_bait_shortage_prompt(
             current_rect,
             allow_ocr=True,
             require_visual_hint=True,
+            allow_visual_fallback=False,
+        )
+        if shortage_info:
+            self._reset_bait_shortage_visual_confirmation()
+            if not self._bait_shortage_context_allows_purchase(current_rect):
+                return False
+            return self._start_bait_purchase_flow(current_rect, shortage_info)
+
+        visual_info = self._detect_bait_shortage_prompt(
+            current_rect,
+            allow_ocr=False,
+            require_visual_hint=True,
             allow_visual_fallback=True,
         )
+        if not visual_info:
+            self._reset_bait_shortage_visual_confirmation()
+            return False
+        shortage_info = self._confirm_bait_shortage_visual_candidate(visual_info)
         if not shortage_info:
             return False
         if not self._bait_shortage_context_allows_purchase(current_rect):
+            self._reset_bait_shortage_visual_confirmation()
             return False
         return self._start_bait_purchase_flow(current_rect, shortage_info)
 
@@ -2355,7 +2425,7 @@ class StateMachine:
             "initial_controls": initial_cluster,
         }
 
-    def _enter_recovering(self, reason, record_empty=False, press_esc=False):
+    def _enter_recovering(self, reason, record_empty=False, press_esc=False, allow_second_esc=True):
         self.ctrl.release_all()
         if record_empty:
             self.record_mgr.add_empty_catch()
@@ -2366,6 +2436,7 @@ class StateMachine:
         self._recovery_esc_requested = bool(press_esc)
         self._recovery_esc_sent = False
         self._recovery_second_esc_sent = False
+        self._recovery_allow_second_esc = bool(allow_second_esc)
         self._recovery_empty_recorded = bool(record_empty)
         self.current_state = self.STATE_RECOVERING
         self._log(f"[恢复] {reason}，开始等待可抛钩界面恢复。")
@@ -3606,9 +3677,7 @@ class StateMachine:
         since_cast = now - getattr(self, "_last_cast_time", now)
         if 0.25 <= since_cast <= 2.20 and now - getattr(self, "_bait_shortage_check_last", 0) >= 1.0:
             self._bait_shortage_check_last = now
-            shortage_info = self._detect_bait_shortage_prompt(rect, require_visual_hint=True, allow_visual_fallback=True)
-            if shortage_info and self._bait_shortage_context_allows_purchase(rect):
-                self._start_bait_purchase_flow(rect, shortage_info)
+            if self._check_bait_shortage_after_cast(rect):
                 return
 
         wait_timeout = max(20, min(int(self.config.get("hook_wait_timeout", 90)), 300))
@@ -4411,6 +4480,15 @@ class StateMachine:
                 return False
         return False
 
+    def _detect_success_settlement_still_visible(self, rect):
+        success_info = self._detect_fast_success_result(rect, fast_only=True)
+        if success_info and success_info.get("location"):
+            return success_info
+        success_info = self._detect_success_result(rect)
+        if success_info and success_info.get("location"):
+            return success_info
+        return None
+
     def _finish_success_result(self, rect, success_info, attempt=1, max_attempts=1, source_label="结算", settlement_info=None):
         if getattr(self, "_stop_requested", False):
             return
@@ -4451,7 +4529,7 @@ class StateMachine:
             self.current_state = self.STATE_IDLE
             return
 
-        self._log("[结算] 已记录本次钓获，但尚未确认结算界面关闭，继续停留在结算状态重试 ESC。")
+        self._log("[结算] 已记录本次钓获，但尚未确认结算界面关闭，继续停留在结算状态确认关闭。")
         self.current_state = self.STATE_RESULT
 
     def _check_result_signals_after_bar_missing(self, rect, missing_elapsed):
@@ -4503,16 +4581,22 @@ class StateMachine:
             close_delay = max(0.4, min(float(self.config.get("settlement_close_delay", 1)), 5.0))
             retry_count = int(getattr(self, "_success_close_retry_count", 0))
             if now - getattr(self, "_success_close_last_esc", 0) >= max(0.75, close_delay):
-                if retry_count < max_attempts:
+                success_info = self._detect_success_settlement_still_visible(rect)
+                if success_info and retry_count < max_attempts:
                     self._finish_success_result(
                         rect,
-                        {"confidence": 0.0, "signals": []},
+                        success_info,
                         attempt=retry_count + 1,
                         max_attempts=max_attempts,
                     )
                     return
-                self._log("[结算] 成功结算界面多次 ESC 后仍未确认关闭，进入恢复流程继续处理。")
-                self._enter_recovering("成功结算界面关闭未确认", record_empty=False, press_esc=True)
+                if success_info:
+                    self._log("[结算] 成功结算界面多次 ESC 后仍未确认关闭，进入恢复流程继续处理。")
+                    self._enter_recovering("成功结算界面关闭未确认", record_empty=False, press_esc=True)
+                    return
+                self._log("[结算] 已发送 ESC 关闭结算，且未再确认结算界面仍存在；为避免重复 ESC 退出钓鱼界面，返回待机继续扫描。")
+                self._reset_round_state()
+                self.current_state = self.STATE_IDLE
                 return
 
             self._sleep_interruptible(0.15)
@@ -4578,7 +4662,12 @@ class StateMachine:
                 return
             if not self._should_stop():
                 press_esc = not bool(getattr(self, "_bait_purchase_exit_shop_sent", False))
-                self._enter_recovering("自动购买鱼饵未完成", record_empty=False, press_esc=press_esc)
+                self._enter_recovering(
+                    "自动购买鱼饵未完成",
+                    record_empty=False,
+                    press_esc=press_esc,
+                    allow_second_esc=False,
+                )
         finally:
             self._set_floating_hidden_for_capture(False)
             self._bait_purchase_in_progress = False
@@ -4607,7 +4696,12 @@ class StateMachine:
             self.current_state = self.STATE_IDLE
             return
 
-        if getattr(self, "_recovery_esc_requested", False) and elapsed >= 3.0 and not getattr(self, "_recovery_second_esc_sent", False):
+        if (
+            getattr(self, "_recovery_esc_requested", False)
+            and getattr(self, "_recovery_allow_second_esc", True)
+            and elapsed >= 3.0
+            and not getattr(self, "_recovery_second_esc_sent", False)
+        ):
             self._log("[恢复] 暂未看到可抛钩提示，执行一次轻量 ESC 复位。")
             self.ctrl.release_all()
             if not self._tap_key_if_running('esc', duration=0.12):

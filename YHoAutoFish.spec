@@ -65,6 +65,7 @@ hiddenimports = [
     "cv2",
     "core.admin",
     "core.dpi",
+    "core.monthly_card_reset",
     "core.updater",
     "core.version",
     "mss",

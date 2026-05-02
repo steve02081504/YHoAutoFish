@@ -143,6 +143,52 @@ class ResultTextProbeMachine(StateMachine):
         return True
 
 
+class CloseRetryController:
+    def __init__(self):
+        self.keys = []
+
+    def release_all(self):
+        return None
+
+    def key_tap(self, key, duration=0.01):
+        self.keys.append((key, float(duration)))
+        return True
+
+
+class PendingSettlementCloseMachine(StateMachine):
+    def __init__(self, settlement_visible=False):
+        super().__init__(config={"settlement_close_delay": 0.4})
+        self.is_running = True
+        self.current_state = self.STATE_RESULT
+        self.ctrl = CloseRetryController()
+        self.settlement_visible = settlement_visible
+        self._success_recorded_pending_close = True
+        self._success_close_retry_count = 1
+        self._success_close_last_esc = 100.0
+        self.clock = 101.0
+
+    def _detect_ready_to_cast(self, rect, allow_heavy=False, require_initial_controls=False, include_f=True, include_prepare_ui=False):
+        return None
+
+    def _detect_fast_success_result(self, rect, fast_only=False):
+        if self.settlement_visible:
+            return {"location": (1, 1), "confidence": 0.95, "signals": []}
+        return None
+
+    def _detect_success_result(self, rect):
+        return None
+
+    def _wait_after_settlement_close(self, rect, max_delay):
+        return False
+
+    def _tap_key_if_running(self, key, duration=0.01):
+        self.ctrl.key_tap(key, duration=duration)
+        return True
+
+    def _sleep_interruptible(self, seconds, step=0.05):
+        return True
+
+
 class ResolutionResultFlowTest(unittest.TestCase):
     def test_template_scale_builder_keeps_common_resolution_anchors(self):
         vision = VisionCore()
@@ -210,6 +256,38 @@ class ResolutionResultFlowTest(unittest.TestCase):
         machine._handle_result((0, 0, 1920, 1080))
 
         self.assertTrue(machine.probe_called)
+
+    def test_recorded_success_does_not_retry_esc_without_visible_settlement(self):
+        machine = PendingSettlementCloseMachine(settlement_visible=False)
+
+        import core.state_machine as state_machine_module
+
+        original_time = state_machine_module.time.time
+        state_machine_module.time.time = lambda: machine.clock
+        try:
+            machine._handle_result((0, 0, 1920, 1080))
+        finally:
+            state_machine_module.time.time = original_time
+
+        self.assertEqual(machine.ctrl.keys, [])
+        self.assertEqual(machine.current_state, machine.STATE_IDLE)
+        self.assertFalse(machine._success_recorded_pending_close)
+
+    def test_recorded_success_retries_esc_only_when_settlement_still_visible(self):
+        machine = PendingSettlementCloseMachine(settlement_visible=True)
+
+        import core.state_machine as state_machine_module
+
+        original_time = state_machine_module.time.time
+        state_machine_module.time.time = lambda: machine.clock
+        try:
+            machine._handle_result((0, 0, 1920, 1080))
+        finally:
+            state_machine_module.time.time = original_time
+
+        self.assertEqual(machine.ctrl.keys, [("esc", 0.15)])
+        self.assertEqual(machine.current_state, machine.STATE_RESULT)
+        self.assertEqual(machine._success_close_retry_count, 2)
 
     def test_initial_fishing_screenshot_is_not_success_settlement(self):
         image_path = Path("debug_settlement_unknown_20260430_173200.png")

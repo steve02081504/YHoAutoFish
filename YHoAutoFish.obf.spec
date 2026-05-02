@@ -66,6 +66,7 @@ hiddenimports = [
     "core.admin",
     "core.controller",
     "core.dpi",
+    "core.monthly_card_reset",
     "core.paths",
     "core.pid",
     "core.record_manager",

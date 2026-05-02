@@ -3,6 +3,7 @@ import json
 import os
 import queue
 import random
+import threading
 import time
 import ctypes
 from ctypes import wintypes
@@ -29,6 +30,13 @@ from PySide6.QtWidgets import (
 )
 
 from core.paths import ensure_writable_file, resource_path
+from core.monthly_card_reset import (
+    CONFIG_KEY_ENABLED as MONTHLY_CARD_RESET_ENABLED_KEY,
+    CONFIG_KEY_LAST_DATE as MONTHLY_CARD_RESET_LAST_DATE_KEY,
+    DEFAULT_CONFIG as MONTHLY_CARD_RESET_DEFAULT_CONFIG,
+    MonthlyCardDailyResetScheduler,
+    perform_double_escape_reset,
+)
 from core.state_machine import StateMachine
 from core.version import APP_AUTHOR, APP_DISPLAY_NAME, APP_REPOSITORY_URL, APP_VERSION
 from core.updater import DownloadCancelled, UpdateError, check_for_update, download_update, get_download_candidates, start_external_update
@@ -2687,6 +2695,7 @@ class AppWindow(QMainWindow):
             "auto_switch_to_log": True,
             "debug_mode": False,
             "bait_shop_debug_mode": False,
+            **MONTHLY_CARD_RESET_DEFAULT_CONFIG,
             "sponsor_button_hidden": False,
             "sponsor_qr_dir": "sponsor_qr",
         }
@@ -2723,6 +2732,8 @@ class AppWindow(QMainWindow):
         self._settings_category_keys = {}
         self._setting_widgets = {}
         self._settings_saved_snapshot = {}
+        self.monthly_card_reset_scheduler = MonthlyCardDailyResetScheduler()
+        self._monthly_card_reset_in_progress = False
 
         self.init_ui()
         self._sync_runtime_preferences()
@@ -2730,6 +2741,12 @@ class AppWindow(QMainWindow):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.process_queue)
         self.timer.start(60)
+
+        self.monthly_card_reset_timer = QTimer(self)
+        self.monthly_card_reset_timer.setTimerType(Qt.CoarseTimer)
+        self.monthly_card_reset_timer.timeout.connect(self._check_monthly_card_daily_reset)
+        self.monthly_card_reset_timer.start(15000)
+        QTimer.singleShot(1000, self._check_monthly_card_daily_reset)
 
         self.init_animation_timer = QTimer(self)
         self.init_animation_timer.timeout.connect(self._tick_init_animation)
@@ -2809,6 +2826,74 @@ class AppWindow(QMainWindow):
         if self.update_info is not None:
             return
         self.start_update_check(manual=False)
+
+    def _monthly_card_reset_enabled(self):
+        snapshot = getattr(self, "_settings_saved_snapshot", {}) or {}
+        if MONTHLY_CARD_RESET_ENABLED_KEY in snapshot:
+            return bool(snapshot.get(MONTHLY_CARD_RESET_ENABLED_KEY))
+        return bool(self.config.get(MONTHLY_CARD_RESET_ENABLED_KEY, False))
+
+    def _save_monthly_card_reset_last_date(self, date_key):
+        self.config[MONTHLY_CARD_RESET_LAST_DATE_KEY] = str(date_key or "")
+        try:
+            data = {}
+            if os.path.exists(CONFIG_FILE):
+                with open(CONFIG_FILE, "r", encoding="utf-8") as file:
+                    loaded = json.load(file)
+                    if isinstance(loaded, dict):
+                        data = loaded
+            data[MONTHLY_CARD_RESET_LAST_DATE_KEY] = self.config[MONTHLY_CARD_RESET_LAST_DATE_KEY]
+            if MONTHLY_CARD_RESET_ENABLED_KEY not in data:
+                data[MONTHLY_CARD_RESET_ENABLED_KEY] = self._monthly_card_reset_enabled()
+            with open(CONFIG_FILE, "w", encoding="utf-8") as file:
+                json.dump(data, file, ensure_ascii=False, indent=4)
+            return True
+        except Exception as exc:
+            self.log_queue.put(f"[月卡复位] 记录每日触发日期失败: {exc}")
+            return False
+
+    def _check_monthly_card_daily_reset(self):
+        if getattr(self, "_shutting_down", False):
+            return
+        if getattr(self, "_monthly_card_reset_in_progress", False):
+            return
+        if not self._monthly_card_reset_enabled():
+            return
+
+        last_date = self.config.get(MONTHLY_CARD_RESET_LAST_DATE_KEY, "")
+        scheduler = self.monthly_card_reset_scheduler
+        if not scheduler.should_trigger(True, last_date):
+            return
+
+        trigger_date = scheduler.date_key()
+        self._monthly_card_reset_in_progress = True
+        self.write_log("[月卡复位] 已到北京时间 05:02，准备执行 ESC、等待 2 秒、再 ESC。")
+        thread = threading.Thread(
+            target=self._run_monthly_card_daily_reset_sequence,
+            args=(trigger_date,),
+            daemon=True,
+        )
+        thread.start()
+
+    def _run_monthly_card_daily_reset_sequence(self, trigger_date):
+        try:
+            ok = perform_double_escape_reset(
+                self.sm.ctrl,
+                window_manager=self.sm.wm,
+                user_activity=self.sm.user_activity,
+                input_lock=getattr(self.sm, "_input_lock", None),
+                delay_seconds=2.0,
+                tap_duration=0.12,
+            )
+            if ok:
+                self._save_monthly_card_reset_last_date(trigger_date)
+                self.log_queue.put("[月卡复位] 双 ESC 复位指令已完成。")
+            else:
+                self.log_queue.put("[月卡复位] 未找到或无法聚焦游戏窗口，本次未发送 ESC。")
+        except Exception as exc:
+            self.log_queue.put(f"[月卡复位] 执行失败: {exc}")
+        finally:
+            self._monthly_card_reset_in_progress = False
 
     def _sync_runtime_preferences(self):
         self.config["log_line_limit"] = int(self.config.get("log_line_limit", 320))
@@ -2986,7 +3071,7 @@ class AppWindow(QMainWindow):
             return
         self._shutting_down = True
 
-        for timer_name in ("update_poll_timer", "timer", "init_animation_timer"):
+        for timer_name in ("update_poll_timer", "timer", "monthly_card_reset_timer", "init_animation_timer"):
             timer = getattr(self, timer_name, None)
             if timer is not None and timer.isActive():
                 timer.stop()
@@ -3894,6 +3979,22 @@ class AppWindow(QMainWindow):
         timing_layout.addStretch()
         self._add_settings_category("流程与超时", timing_page, timing_keys)
 
+        monthly_card_page, monthly_card_layout = self._build_settings_category_page(
+            "月卡复位",
+            "仅供已开通游戏内月卡的用户手动开启。开启后，程序会按北京时间每天 05:02 执行一次双 ESC 复位。",
+        )
+        monthly_card_keys = []
+        self.monthly_card_reset_button = self._settings_toggle_block(
+            monthly_card_layout,
+            "每日 05:02 双 ESC 复位",
+            "确认自己是游戏内月卡用户后再开启。开启后，每个北京时间日期最多触发一次：先按 ESC，等待 2 秒，再按 ESC，帮助回到钓鱼初始界面。",
+            self.config.get(MONTHLY_CARD_RESET_ENABLED_KEY, False),
+            MONTHLY_CARD_RESET_ENABLED_KEY,
+        )
+        monthly_card_keys.append(MONTHLY_CARD_RESET_ENABLED_KEY)
+        monthly_card_layout.addStretch()
+        self._add_settings_category("月卡复位", monthly_card_page, monthly_card_keys)
+
         bait_page, bait_layout = self._build_settings_category_page(
             "鱼饵补给",
             "仅在开始钓鱼后检测到鱼饵不足提示时触发，自动进入商店购买无上限万能鱼饵。",
@@ -4646,6 +4747,7 @@ class AppWindow(QMainWindow):
             self._refresh_settings_saved_snapshot()
             self._set_settings_dirty(False)
             self.show_toast("高级设置已保存并应用", "success")
+            self._check_monthly_card_daily_reset()
         else:
             self.show_toast("设置保存失败，请查看运行日志", "danger")
 
