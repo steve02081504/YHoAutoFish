@@ -1026,7 +1026,7 @@ class SponsorHideDialog(QDialog):
 
         body = QLabel(
             "确认关闭后，标题栏里的“请作者喝一点咖啡吗？”入口会从后续启动中隐藏，不会再自动显示。\n\n"
-            "这个设置只影响赞助入口的展示，不会影响自动钓鱼、鱼饵补给、钓鱼记录、图鉴记录、更新检查和其他功能。\n\n"
+            "这个设置只影响赞助入口的展示，不会影响自动钓鱼、钓鱼记录、图鉴记录、更新检查和其他功能。\n\n"
             "后续如需恢复显示，可以在配置文件中恢复对应显示设置。"
         )
         body.setWordWrap(True)
@@ -2688,13 +2688,11 @@ class AppWindow(QMainWindow):
             "user_takeover_protection": True,
             "user_takeover_mouse_threshold": 12,
             "user_takeover_start_grace": 1.20,
-            "auto_buy_bait_amount": 0,
             "update_startup_jitter_seconds": 20,
             "update_check_interval_minutes": 30,
             "log_line_limit": 320,
             "auto_switch_to_log": True,
             "debug_mode": False,
-            "bait_shop_debug_mode": False,
             **MONTHLY_CARD_RESET_DEFAULT_CONFIG,
             "sponsor_button_hidden": False,
             "sponsor_qr_dir": "sponsor_qr",
@@ -2931,9 +2929,7 @@ class AppWindow(QMainWindow):
         self.sm.update_config("user_takeover_protection", self.config.get("user_takeover_protection", True))
         self.sm.update_config("user_takeover_mouse_threshold", self.config.get("user_takeover_mouse_threshold", 12))
         self.sm.update_config("user_takeover_start_grace", self.config.get("user_takeover_start_grace", 1.20))
-        self.sm.update_config("auto_buy_bait_amount", self.config.get("auto_buy_bait_amount", 0))
         self.sm.update_config("debug_mode", self.config.get("debug_mode", False))
-        self.sm.update_config("bait_shop_debug_mode", self.config.get("bait_shop_debug_mode", False))
 
     def _refresh_debug_view_state(self):
         if not hasattr(self, "debug_preview"):
@@ -3995,24 +3991,6 @@ class AppWindow(QMainWindow):
         monthly_card_layout.addStretch()
         self._add_settings_category("月卡复位", monthly_card_page, monthly_card_keys)
 
-        bait_page, bait_layout = self._build_settings_category_page(
-            "鱼饵补给",
-            "仅在开始钓鱼后检测到鱼饵不足提示时触发，自动进入商店购买无上限万能鱼饵。",
-        )
-        bait_keys = []
-        self.slider_auto_buy_bait_amount = self._bait_purchase_settings_block(bait_layout)
-        bait_keys.append("auto_buy_bait_amount")
-        self.bait_shop_debug_button = self._settings_toggle_block(
-            bait_layout,
-            "鱼饵商店候选调试",
-            "开启后，自动购买鱼饵定位失败时会在程序目录保存候选框截图和明细文本，用于排查商品卡片、货币图标和名称识别问题。",
-            self.config.get("bait_shop_debug_mode", False),
-            "bait_shop_debug_mode",
-        )
-        bait_keys.append("bait_shop_debug_mode")
-        bait_layout.addStretch()
-        self._add_settings_category("鱼饵补给", bait_page, bait_keys)
-
         recognition_page, recognition_layout = self._build_settings_category_page(
             "识别与判定",
             "控制耐力条置信度和结算/失败检测频率。数值越激进，响应越快；数值越保守，误判风险越低。",
@@ -4137,7 +4115,7 @@ class AppWindow(QMainWindow):
         self.sponsor_button_visible_button = self._sponsor_visibility_settings_block(
             display_layout,
             "显示请喝咖啡入口",
-            "关闭标题栏赞助入口后，可在这里重新显示。该开关只影响标题栏入口，不影响自动钓鱼、鱼饵补给、记录和图鉴功能。",
+            "关闭标题栏赞助入口后，可在这里重新显示。该开关只影响标题栏入口，不影响自动钓鱼、记录和图鉴功能。",
             not bool(self.config.get("sponsor_button_hidden", False)),
             "sponsor_button_hidden",
         )
@@ -4394,109 +4372,6 @@ class AppWindow(QMainWindow):
             "config_decimals": config_decimals,
         }
         self.config[key] = self._config_from_slider_value(slider_value, value_scale, config_decimals)
-        return slider
-
-    def _bait_purchase_settings_block(self, parent_layout):
-        key = "auto_buy_bait_amount"
-        block = self._settings_panel()
-        layout = QVBoxLayout(block)
-        layout.setContentsMargins(18, 16, 18, 16)
-        layout.setSpacing(10)
-
-        top = QHBoxLayout()
-        title_label = QLabel("鱼饵不足自动购买")
-        title_label.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 16px; font-weight: 800;")
-        top.addWidget(title_label)
-        top.addStretch()
-
-        raw_amount = self.config.get(key, 0)
-        try:
-            slider_value = int(float(raw_amount) // 99)
-        except (TypeError, ValueError):
-            slider_value = 0
-        slider_value = max(0, min(101, slider_value))
-
-        value_label = QLabel()
-        value_label.setStyleSheet(
-            f"""
-            QLabel {{
-                color: {APP_COLORS['accent_soft']};
-                background-color: rgba(29, 208, 214, 0.10);
-                border: 1px solid rgba(29, 208, 214, 0.22);
-                border-radius: 14px;
-                padding: 6px 10px;
-                font-size: 18px;
-                font-weight: 900;
-            }}
-            """
-        )
-        value_label.setMinimumWidth(96)
-        value_label.setAlignment(Qt.AlignCenter)
-        top.addWidget(value_label)
-        layout.addLayout(top)
-
-        note_label = QLabel("设置为 0 时关闭自动购买。开启后每次购买 99 个万能鱼饵，单个鱼饵按 5 鱼鳞币计算。")
-        note_label.setWordWrap(True)
-        note_label.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 12px;")
-        layout.addWidget(note_label)
-
-        cost_label = QLabel()
-        cost_label.setWordWrap(True)
-        cost_label.setStyleSheet(
-            f"background: transparent; border: none; color: {APP_COLORS['warning']}; font-size: 12px; font-weight: 800;"
-        )
-        layout.addWidget(cost_label)
-
-        slider = NoWheelSlider(Qt.Horizontal)
-        slider.setRange(0, 101)
-        slider.setValue(slider_value)
-        slider.setFocusPolicy(Qt.NoFocus)
-        slider.setStyleSheet(
-            f"""
-            QSlider::groove:horizontal {{
-                background-color: rgba(255, 255, 255, 0.08);
-                border-radius: 5px;
-                height: 10px;
-            }}
-            QSlider::sub-page:horizontal {{
-                background-color: rgba(29, 208, 214, 0.82);
-                border-radius: 5px;
-                height: 10px;
-            }}
-            QSlider::handle:horizontal {{
-                background-color: #B8FFFF;
-                border: 2px solid rgba(29, 208, 214, 0.92);
-                width: 16px;
-                margin: -4px 0;
-                border-radius: 8px;
-            }}
-            """
-        )
-
-        def update_bait_amount(new_value):
-            amount = int(new_value) * 99
-            cost = amount * 5
-            self.config[key] = amount
-            value_label.setText("关闭" if amount <= 0 else f"{amount}个")
-            if amount <= 0:
-                cost_label.setText("自动购买已关闭；鱼饵不足时会停止自动钓鱼，避免重复空转。")
-            else:
-                cost_label.setText(f"当前设置会购买 {amount} 个万能鱼饵，需要准备 {cost} 鱼鳞币；鱼鳞币不足时购买流程会停止。")
-            self._mark_settings_dirty()
-
-        slider.valueChanged.connect(update_bait_amount)
-        update_bait_amount(slider_value)
-        layout.addWidget(slider)
-        parent_layout.addWidget(block)
-        self._setting_widgets[key] = {
-            "type": "slider",
-            "widget": slider,
-            "value_scale": 99,
-            "display_scale": 99,
-            "display_suffix": "个",
-            "display_decimals": 0,
-            "config_decimals": None,
-        }
         return slider
 
     def _settings_toggle_block(self, parent_layout, title, note, checked, key):

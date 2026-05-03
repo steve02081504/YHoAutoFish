@@ -189,6 +189,36 @@ class PendingSettlementCloseMachine(StateMachine):
         return True
 
 
+class BarMissingAfterProbeMachine(StateMachine):
+    def __init__(self, full_probe_done=True, control_frames=4):
+        super().__init__(config={"bar_missing_timeout": 3})
+        self.is_running = True
+        self.current_state = self.STATE_FISHING
+        self.ctrl = CloseRetryController()
+        self.clock = 101.55
+        self._fishing_start_time = 95.0
+        self._confirmed_fishing_bar = True
+        self._fishing_control_started = True
+        self._round_had_fishing_bar = True
+        self._fishing_control_frame_count = control_frames
+        self._last_valid_bar_time = 100.0
+        self._last_bar_seen_time = 100.0
+        self._missing_start_time = 100.55
+        self._result_quick_check_last = 100.80
+        self._result_full_check_last = 101.00 if full_probe_done else 100.55
+        self.result_probe_called = False
+
+    def _select_fishing_bar_detection(self, rect, primary_roi):
+        return None, None, None, None, 0.0
+
+    def _hold_recent_fishing_control_on_gap(self):
+        return False
+
+    def _check_result_signals_after_bar_missing(self, rect, missing_elapsed):
+        self.result_probe_called = True
+        return False
+
+
 class ResolutionResultFlowTest(unittest.TestCase):
     def test_template_scale_builder_keeps_common_resolution_anchors(self):
         vision = VisionCore()
@@ -288,6 +318,51 @@ class ResolutionResultFlowTest(unittest.TestCase):
         self.assertEqual(machine.ctrl.keys, [("esc", 0.15)])
         self.assertEqual(machine.current_state, machine.STATE_RESULT)
         self.assertEqual(machine._success_close_retry_count, 2)
+
+    def test_confirmed_bar_missing_enters_result_after_result_probes(self):
+        machine = BarMissingAfterProbeMachine(full_probe_done=True)
+
+        import core.state_machine as state_machine_module
+
+        original_time = state_machine_module.time.time
+        state_machine_module.time.time = lambda: machine.clock
+        try:
+            machine._handle_fishing((0, 0, 1920, 1080), (0.25, 0.35, 0.50, 0.20))
+        finally:
+            state_machine_module.time.time = original_time
+
+        self.assertTrue(machine.result_probe_called)
+        self.assertEqual(machine.current_state, machine.STATE_RESULT)
+
+    def test_confirmed_bar_missing_waits_for_full_result_probe_before_result_state(self):
+        machine = BarMissingAfterProbeMachine(full_probe_done=False)
+
+        import core.state_machine as state_machine_module
+
+        original_time = state_machine_module.time.time
+        state_machine_module.time.time = lambda: machine.clock
+        try:
+            machine._handle_fishing((0, 0, 1920, 1080), (0.25, 0.35, 0.50, 0.20))
+        finally:
+            state_machine_module.time.time = original_time
+
+        self.assertTrue(machine.result_probe_called)
+        self.assertEqual(machine.current_state, machine.STATE_FISHING)
+
+    def test_confirmed_bar_missing_keeps_waiting_when_control_was_not_stable(self):
+        machine = BarMissingAfterProbeMachine(full_probe_done=True, control_frames=1)
+
+        import core.state_machine as state_machine_module
+
+        original_time = state_machine_module.time.time
+        state_machine_module.time.time = lambda: machine.clock
+        try:
+            machine._handle_fishing((0, 0, 1920, 1080), (0.25, 0.35, 0.50, 0.20))
+        finally:
+            state_machine_module.time.time = original_time
+
+        self.assertTrue(machine.result_probe_called)
+        self.assertEqual(machine.current_state, machine.STATE_FISHING)
 
     def test_initial_fishing_screenshot_is_not_success_settlement(self):
         image_path = Path("debug_settlement_unknown_20260430_173200.png")

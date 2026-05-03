@@ -261,10 +261,8 @@ $Manifest = [ordered]@{
 if (-not [string]::IsNullOrWhiteSpace($GiteeRepositoryUrl) -and -not [string]::IsNullOrWhiteSpace($GiteeTag)) {
     $Manifest["gitee_release_tag"] = $GiteeTag
     $Manifest["gitee_html_url"] = $GiteeReleaseUrl
-    $Manifest["gitee_download_urls"] = @(
-        "$GiteeRepositoryUrl/releases/download/$GiteeTag/$ZipName"
-    )
     if ($SplitPartFiles.Count -gt 0) {
+        $Manifest["gitee_download_urls"] = @()
         $Manifest["gitee_sha256"] = Get-MergedSha256 -Files $SplitPartFiles
         $Manifest["gitee_release_asset_names"] = @("latest.json") + @($SplitPartFiles | ForEach-Object { $_.Name })
         $Manifest["gitee_asset_parts"] = @(
@@ -273,11 +271,18 @@ if (-not [string]::IsNullOrWhiteSpace($GiteeRepositoryUrl) -and -not [string]::I
                     name = $PartFile.Name
                     size = [int64]$PartFile.Length
                     sha256 = (Get-FileHash -LiteralPath $PartFile.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+                    download_urls = @(
+                        "$RepositoryUrl/releases/download/$GitHubTag/$($PartFile.Name)"
+                    )
                     gitee_download_urls = @(
                         "$GiteeRepositoryUrl/releases/download/$GiteeTag/$($PartFile.Name)"
                     )
                 }
             }
+        )
+    } else {
+        $Manifest["gitee_download_urls"] = @(
+            "$GiteeRepositoryUrl/releases/download/$GiteeTag/$ZipName"
         )
     }
 }

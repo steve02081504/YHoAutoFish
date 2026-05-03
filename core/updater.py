@@ -1184,6 +1184,8 @@ def get_download_candidates(update_info, source=UPDATE_SOURCE_GITHUB):
         source = UPDATE_SOURCE_GITHUB
 
     if source == UPDATE_SOURCE_GITEE:
+        if _get_asset_parts(update_info, UPDATE_SOURCE_GITEE):
+            return ()
         generic_non_github = [
             url for url in _merge_urls(_configured_download_urls(update_info), getattr(update_info, "download_urls", ()))
             if not _is_github_url(url)
@@ -1302,6 +1304,11 @@ def _verify_sha256(path, expected_sha256):
         raise UpdateError("更新包 SHA256 校验失败，已拒绝安装")
 
 
+def _looks_like_forbidden_download_error(error):
+    text = str(error or "").lower()
+    return "403" in text or "forbidden" in text
+
+
 def _download_split_update(update_info, parts, download_root, progress_callback=None, timeout=25, source=UPDATE_SOURCE_GITEE, cancel_callback=None):
     parts_root = download_root / f"{update_info.asset_name}.parts"
     parts_root.mkdir(parents=True, exist_ok=True)
@@ -1386,15 +1393,23 @@ def download_update(update_info, progress_callback=None, timeout=25, source=UPDA
     _raise_if_cancelled(cancel_callback)
 
     if parts:
-        return _download_split_update(
-            update_info,
-            parts,
-            download_root=download_root,
-            progress_callback=progress_callback,
-            timeout=timeout,
-            source=source,
-            cancel_callback=cancel_callback,
-        )
+        try:
+            return _download_split_update(
+                update_info,
+                parts,
+                download_root=download_root,
+                progress_callback=progress_callback,
+                timeout=timeout,
+                source=source,
+                cancel_callback=cancel_callback,
+            )
+        except UpdateError as exc:
+            if source != UPDATE_SOURCE_GITEE or not _looks_like_forbidden_download_error(exc):
+                raise
+            source = UPDATE_SOURCE_GITHUB
+            expected_sha256 = _expected_sha256_for_source(update_info, source)
+            if progress_callback:
+                progress_callback(0, 0, 0)
 
     errors = []
     candidates = list(get_download_candidates(update_info, source=source))
