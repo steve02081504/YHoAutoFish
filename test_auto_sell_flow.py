@@ -1,7 +1,11 @@
 import unittest
 import tempfile
+import time
 from pathlib import Path
 from queue import Queue
+
+import cv2
+import numpy as np
 
 from core.state_machine import StateMachine
 
@@ -93,6 +97,58 @@ class AutoSellVisibilityMachine(StateMachine):
 
     def _tap_key_if_running(self, key, duration=0.01):
         self.keys.append((key, duration))
+        return True
+
+
+class AutoSellConfirmCapture:
+    def __init__(self):
+        self.last_roi = None
+
+    def capture_relative(self, rect, *roi):
+        self.last_roi = roi
+        return object()
+
+    def relative_rect(self, rect, *roi):
+        return (
+            rect[0] + int(rect[2] * roi[0]),
+            rect[1] + int(rect[3] * roi[1]),
+            int(rect[2] * roi[2]),
+            int(rect[3] * roi[3]),
+        )
+
+
+class AutoSellConfirmVision:
+    def __init__(self, capture):
+        self.capture = capture
+        self.rois = []
+
+    def find_best_template_multi_strategy(self, image, templates, strategies, threshold=0.75, **kwargs):
+        roi = self.capture.last_roi
+        self.rois.append(roi)
+        if roi and roi[1] < 0.50:
+            return (10, 20), 0.96, "confirm.png", "fake-prompt-text"
+        return (120, 45), 0.94, "confirm.png", "fake-button"
+
+
+class AutoSellConfirmButtonMachine(StateMachine):
+    def __init__(self):
+        super().__init__(config={"auto_sell_catch_threshold": 1})
+        self.is_running = True
+        self.current_state = self.STATE_SELLING_CATCHES
+        self._auto_sell_pending = True
+        self._auto_sell_session_catch_count = 1
+        self._auto_sell_started_at = time.time() - 2.0
+        self._auto_sell_step = "confirm"
+        self._auto_sell_step_started = time.time() - 1.0
+        self.sc = AutoSellConfirmCapture()
+        self.vis = AutoSellConfirmVision(self.sc)
+        self.clicks = []
+
+    def _auto_sell_confirm_templates(self):
+        return ["confirm"]
+
+    def _click_screen_point_if_running(self, x, y, duration=0.05):
+        self.clicks.append((x, y, duration))
         return True
 
 
@@ -222,6 +278,32 @@ class AutoSellFlowTest(unittest.TestCase):
         self.assertIn("CMD_FLOATING_RESTORE_AFTER_CAPTURE", commands)
         self.assertNotIn("CMD_MAIN_HIDE_FOR_CAPTURE", commands)
         self.assertNotIn("CMD_MAIN_RESTORE_AFTER_CAPTURE", commands)
+
+    def test_auto_sell_confirm_clicks_lower_button_not_prompt_text(self):
+        machine = AutoSellConfirmButtonMachine()
+        rect = (0, 0, 888, 420)
+
+        machine._handle_auto_sell(rect)
+
+        self.assertEqual(machine._auto_sell_step, "wait_after_confirm")
+        self.assertEqual(len(machine.clicks), 1)
+        self.assertGreaterEqual(machine.clicks[0][1], int(rect[3] * 0.68))
+        self.assertTrue(machine.vis.rois)
+        self.assertTrue(all(roi[1] >= 0.56 for roi in machine.vis.rois))
+
+    def test_auto_sell_confirm_rois_cover_full_lower_right_button_template(self):
+        machine = StateMachine(config={})
+        template_path = machine._auto_sell_confirm_templates()[0]
+        template = cv2.imdecode(np.fromfile(template_path, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+        self.assertIsNotNone(template)
+        template_width = int(template.shape[1])
+
+        rois = machine._auto_sell_confirm_button_rois()
+
+        self.assertTrue(rois)
+        self.assertLessEqual(min(roi[1] for roi in rois), 0.60)
+        self.assertTrue(all(roi[0] >= 0.43 for roi in rois))
+        self.assertTrue(any(int(888 * roi[2]) >= template_width for roi in rois))
 
 
 if __name__ == "__main__":

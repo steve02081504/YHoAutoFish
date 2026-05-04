@@ -204,6 +204,12 @@ class StateMachine:
             exact_names=("鱼获出售界面鱼舱子界面一键出售后确认弹窗的确认按钮.png",),
         )
 
+    def _auto_sell_confirm_button_rois(self):
+        return (
+            (0.43, 0.58, 0.54, 0.40),
+            (0.48, 0.62, 0.48, 0.34),
+        )
+
     def _client_point_to_screen(self, rect, roi, loc):
         abs_roi = self.sc.relative_rect(rect, *roi) if self.sc is not None else None
         if abs_roi is None or loc is None:
@@ -835,6 +841,10 @@ class StateMachine:
                         "strategy": strategy_name,
                         "initial_controls": initial_cluster,
                     }
+                blocking_info = self._ready_blocking_result(rect, confidence_hint=conf)
+                if blocking_info:
+                    blocking_info["initial_controls"] = initial_cluster
+                    return blocking_info
                 return {
                     "kind": "钓鱼初始界面" if initial_cluster.get("count", 0) >= 2 and initial_cluster.get("valid") else "F键图标",
                     "confidence": conf,
@@ -867,6 +877,10 @@ class StateMachine:
                         "strategy": strategy_name,
                         "initial_controls": initial_cluster,
                     }
+                blocking_info = self._ready_blocking_result(rect, confidence_hint=conf)
+                if blocking_info:
+                    blocking_info["initial_controls"] = initial_cluster
+                    return blocking_info
                 return {
                     "kind": "钓鱼初始界面" if initial_cluster.get("count", 0) >= 2 and initial_cluster.get("valid") else "F键图标",
                     "confidence": conf,
@@ -880,6 +894,13 @@ class StateMachine:
             initial_cluster = self._detect_initial_control_cluster(rect)
             if initial_cluster.get("count", 0) >= 2 and initial_cluster.get("valid"):
                 first_match = initial_cluster.get("matches", [{}])[0]
+                blocking_info = self._ready_blocking_result(
+                    rect,
+                    confidence_hint=initial_cluster.get("confidence", 0.0),
+                )
+                if blocking_info:
+                    blocking_info["initial_controls"] = initial_cluster
+                    return blocking_info
                 return {
                     "kind": "钓鱼初始界面组合控件",
                     "confidence": initial_cluster.get("confidence", 0.0),
@@ -924,6 +945,9 @@ class StateMachine:
             if conf > best_conf:
                 best_conf = conf
             if loc:
+                blocking_info = self._ready_blocking_result(rect, confidence_hint=conf)
+                if blocking_info:
+                    return blocking_info
                 return {
                     "kind": "开始钓鱼按钮",
                     "confidence": conf,
@@ -950,6 +974,9 @@ class StateMachine:
                     if conf > best_conf:
                         best_conf = conf
                     if loc:
+                        blocking_info = self._ready_blocking_result(rect, confidence_hint=conf)
+                        if blocking_info:
+                            return blocking_info
                         return {
                             "kind": "钓鱼准备界面",
                             "confidence": conf,
@@ -963,6 +990,75 @@ class StateMachine:
             "location": None,
             "template": None,
         } if best_conf >= 0 else None
+
+    def _ready_blocking_result(self, rect, confidence_hint=0.0):
+        blocking_info = self._detect_blocking_result_for_cast(rect)
+        if not blocking_info:
+            return None
+        result_info = dict(blocking_info)
+        result_info["blocking_result"] = dict(blocking_info.get("blocking_result") or blocking_info)
+        block_reason = blocking_info.get("block_reason")
+        if not block_reason:
+            kind = str(blocking_info.get("kind") or "")
+            if "成功" in kind:
+                block_reason = "success_result"
+            elif "失败" in kind:
+                block_reason = "failed_result"
+            else:
+                block_reason = "result_visible"
+        result_info["block_reason"] = block_reason
+        result_info["confidence"] = max(
+            float(result_info.get("confidence") or 0.0),
+            float(confidence_hint or 0.0),
+        )
+        result_info["location"] = None
+        result_info.setdefault("template", None)
+        result_info.setdefault("strategy", "result-block")
+        return result_info
+
+    def _detect_blocking_result_for_cast(self, rect):
+        success_info = self._detect_ultrafast_success_result(rect)
+        if success_info and success_info.get("location"):
+            return {
+                "kind": "成功结算界面",
+                "confidence": success_info.get("confidence", 0.0),
+                "location": success_info.get("location"),
+                "template": success_info.get("template"),
+                "strategy": "success-result-block",
+                "signals": success_info.get("signals", []),
+                "blocking_result": success_info,
+                "block_reason": "success_result",
+            }
+
+        failed_info = self._detect_fast_failed_result(rect)
+        if failed_info and failed_info.get("location") and self._is_strong_failed_result(failed_info):
+            return {
+                "kind": "失败结算界面",
+                "confidence": failed_info.get("confidence", 0.0),
+                "location": failed_info.get("location"),
+                "template": failed_info.get("template"),
+                "strategy": failed_info.get("strategy") or "failed-result-block",
+                "blocking_result": failed_info,
+                "block_reason": "failed_result",
+            }
+
+        return None
+
+    def _handle_ready_blocking_result(self, rect, ready_info, source_label):
+        result_info = (ready_info or {}).get("blocking_result")
+        if not result_info:
+            return False
+
+        reason = (ready_info or {}).get("block_reason")
+        if reason == "success_result":
+            self._log(f"[{source_label}] 检测到成功结算界面仍未处理，优先进入结算流程。")
+            self._finish_fast_success_result(rect, result_info, source_label=source_label)
+            return True
+
+        if reason == "failed_result":
+            return self._maybe_finish_failed_result(rect, result_info, source_label=source_label)
+
+        return False
 
     def _send_cast_input(self, ready_info, source_label):
         with self._input_lock:
@@ -1033,6 +1129,16 @@ class StateMachine:
         self._recovery_empty_recorded = bool(record_empty)
         self.current_state = self.STATE_RECOVERING
         self._log(f"[恢复] {reason}，开始等待可抛钩界面恢复。")
+
+    def _enter_result_from_fishing_anomaly(self, reason):
+        self._log(f"[溜鱼] {reason}，进入结果判定...")
+        self.ctrl.release_all()
+        self._fish_control_direction = 0
+        self._fish_control_min_hold_until = 0
+        self._result_quick_check_last = 0
+        self._result_full_check_last = 0
+        self._clear_result_ready_candidate()
+        self.current_state = self.STATE_RESULT
 
     def _filter_bar_detection(self, target_x, cursor_x, target_w, confidence, roi_width):
         now = time.time()
@@ -2240,10 +2346,17 @@ class StateMachine:
         ready_info = self._detect_ready_to_cast(rect, allow_heavy=(self._debug_count % 6 == 0))
         if self._should_stop():
             return
+
+        if ready_info and ready_info.get("blocking_result"):
+            if self._handle_ready_blocking_result(rect, ready_info, "待机"):
+                return
         
         if ready_info and ready_info.get("location"):
             if getattr(self, "_auto_sell_pending", False) and self._auto_sell_threshold() > 0:
                 strict_ready = self._detect_ready_to_cast(rect, allow_heavy=False, require_initial_controls=True)
+                if strict_ready and strict_ready.get("blocking_result"):
+                    if self._handle_ready_blocking_result(rect, strict_ready, "待机"):
+                        return
                 if strict_ready and strict_ready.get("location"):
                     if self._start_auto_sell_flow(rect, strict_ready):
                         return
@@ -2344,10 +2457,7 @@ class StateMachine:
             info = self._match_auto_sell_template(
                 rect,
                 self._auto_sell_confirm_templates(),
-                (
-                    (0.20, 0.35, 0.60, 0.45),
-                    (0.0, 0.0, 1.0, 1.0),
-                ),
+                self._auto_sell_confirm_button_rois(),
             )
             if info and info.get("screen_point"):
                 x, y = info["screen_point"]
@@ -2448,6 +2558,9 @@ class StateMachine:
                 require_initial_controls=False,
                 include_f=False,
             )
+            if ready_info and ready_info.get("blocking_result"):
+                if self._handle_ready_blocking_result(rect, ready_info, "等待"):
+                    return
             if ready_info and ready_info.get("location"):
                 retry_count = int(getattr(self, '_waiting_recast_count', 0))
                 max_retries = 2
@@ -2526,8 +2639,7 @@ class StateMachine:
                     return
                 pre_control_timeout = max(10.0, min(float(self.config.get("pre_control_timeout", 14)), 30.0))
                 if transition_elapsed > pre_control_timeout:
-                    self._log(f"[溜鱼] 上钩后 {pre_control_timeout:.0f} 秒仍未进入有效溜鱼控制，进入恢复流程。")
-                    self._enter_recovering("上钩后长时间未进入有效溜鱼控制", record_empty=True, press_esc=False)
+                    self._enter_result_from_fishing_anomaly(f"上钩后 {pre_control_timeout:.0f} 秒仍未进入有效溜鱼控制")
                 return
 
             if not getattr(self, '_confirmed_fishing_bar', False):
@@ -2541,8 +2653,7 @@ class StateMachine:
                 if transition_elapsed >= 1.0 and self._check_terminal_result_before_bar(rect, transition_elapsed):
                     return
                 if transition_elapsed > 5.0:
-                    self._log("[溜鱼] 长时间未检测到耐力条，进入结果判定...")
-                    self._enter_recovering("上钩后长时间未出现耐力条", record_empty=True, press_esc=False)
+                    self._enter_result_from_fishing_anomaly("上钩后长时间未出现耐力条")
                 return
 
             # 引入容错：偶尔一帧没识别到不算结束，连续丢失超过用户设定才算结束
@@ -3404,6 +3515,10 @@ class StateMachine:
         elapsed = now - self._recovery_start_time
 
         ready_info = self._detect_ready_to_cast(rect, allow_heavy=(elapsed >= 2.0), require_initial_controls=True)
+        if ready_info and ready_info.get("blocking_result"):
+            if self._handle_ready_blocking_result(rect, ready_info, "恢复"):
+                return
+
         if ready_info and ready_info.get("location"):
             self._log(f"[恢复] 已检测到{ready_info.get('kind') or '可抛钩提示'}，恢复到待机流程。")
             self._reset_round_state()

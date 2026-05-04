@@ -49,6 +49,80 @@ class ReadyDetectMachine(StateMachine):
         return ["R"]
 
 
+class BlockingReadyDetectMachine(ReadyDetectMachine):
+    def _detect_blocking_result_for_cast(self, rect):
+        return {
+            "kind": "成功结算界面",
+            "location": (11, 22),
+            "confidence": 0.93,
+            "signals": [],
+        }
+
+
+class WaitHookVision:
+    def find_best_template(self, image, templates, threshold=0.75, **kwargs):
+        return None, 0.0, None
+
+
+class WaitingBlockingResultMachine(StateMachine):
+    def __init__(self):
+        super().__init__(config={"cast_retry_delay": 6})
+        self.sc = FakeCapture()
+        self.vis = WaitHookVision()
+        self.is_running = True
+        self.current_state = self.STATE_WAITING
+        now = time.time()
+        self._waiting_start_time = now - 8.0
+        self._last_cast_time = now - 8.0
+        self.finished_success = False
+        self.cast_sent = False
+
+    def _hook_text_templates(self):
+        return ["hook"]
+
+    def _detect_ready_to_cast(self, rect, allow_heavy=False, require_initial_controls=False, include_f=True, include_prepare_ui=False):
+        return {
+            "kind": "成功结算界面",
+            "location": None,
+            "blocking_result": {"location": (1, 1), "confidence": 0.95, "signals": []},
+            "block_reason": "success_result",
+        }
+
+    def _finish_fast_success_result(self, rect, success_info, source_label="溜鱼"):
+        self.finished_success = True
+
+    def _send_cast_input(self, ready_info, source_label):
+        self.cast_sent = True
+        return True
+
+    def _sleep_interruptible(self, seconds, step=0.05):
+        return True
+
+
+class PreControlTimeoutMachine(StateMachine):
+    def __init__(self):
+        super().__init__(config={"pre_control_timeout": 10})
+        self.is_running = True
+        self.current_state = self.STATE_FISHING
+        self._prepare_fishing_round_state(time.time() - 11.0)
+        self.empty_records = 0
+
+        class FakeRecordManager:
+            def __init__(self, owner):
+                self.owner = owner
+
+            def add_empty_catch(self):
+                self.owner.empty_records += 1
+
+        self.record_mgr = FakeRecordManager(self)
+
+    def _select_fishing_bar_detection(self, rect, roi):
+        return None, None, None, None, 0.0
+
+    def _check_terminal_result_before_bar(self, rect, elapsed):
+        return False
+
+
 class ResultConfirmMachine(StateMachine):
     def __init__(self):
         super().__init__(config={"empty_ready_confirm_delay": 0.45})
@@ -321,6 +395,32 @@ class ResolutionResultFlowTest(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result.get("kind"), "钓鱼初始界面")
         self.assertIsNotNone(result.get("location"))
+
+    def test_success_settlement_blocks_ready_to_cast_even_when_controls_match(self):
+        machine = BlockingReadyDetectMachine({"Q": (380, 120), "E": (384, 210), "R": (382, 300)})
+
+        result = machine._detect_ready_to_cast((0, 0, 1600, 900), require_initial_controls=True)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.get("kind"), "成功结算界面")
+        self.assertIsNone(result.get("location"))
+        self.assertEqual(result.get("block_reason"), "success_result")
+
+    def test_waiting_handles_blocking_success_result_without_recasting(self):
+        machine = WaitingBlockingResultMachine()
+
+        machine._handle_waiting((0, 0, 1920, 1080), (0.2, 0.2, 0.6, 0.5))
+
+        self.assertTrue(machine.finished_success)
+        self.assertFalse(machine.cast_sent)
+
+    def test_pre_control_timeout_enters_result_instead_of_recovery(self):
+        machine = PreControlTimeoutMachine()
+
+        machine._handle_fishing((0, 0, 1920, 1080), (0.3, 0.5, 0.4, 0.2))
+
+        self.assertEqual(machine.current_state, machine.STATE_RESULT)
+        self.assertEqual(machine.empty_records, 0)
 
     def test_result_ready_requires_longer_stable_confirmation_after_fishing(self):
         machine = ResultConfirmMachine()
