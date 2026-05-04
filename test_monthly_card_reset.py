@@ -1,7 +1,9 @@
 import os
+import tempfile
 import threading
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from core.monthly_card_reset import (
     BEIJING_TZ,
@@ -150,19 +152,25 @@ class AppWindowMonthlyCardResetConfigTest(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def test_app_window_defaults_and_settings_include_monthly_card_switch(self):
-        from gui.app import AppWindow
+        from gui import app as app_module
 
-        window = AppWindow()
-        self.addCleanup(window.shutdown_background_tasks)
-        self.addCleanup(window.close)
+        original_config_file = app_module.CONFIG_FILE
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_module.CONFIG_FILE = str(Path(temp_dir, "config.json"))
+            try:
+                window = app_module.AppWindow()
+                self.addCleanup(window.shutdown_background_tasks)
+                self.addCleanup(window.close)
 
-        self.assertFalse(window.config[CONFIG_KEY_ENABLED])
-        self.assertEqual(window.config[CONFIG_KEY_LAST_DATE], "")
-        self.assertIn(CONFIG_KEY_ENABLED, window._settings_snapshot_keys())
-        widget_info = window._setting_widgets.get(CONFIG_KEY_ENABLED)
-        self.assertIsNotNone(widget_info)
-        self.assertEqual(widget_info["type"], "toggle")
-        self.assertEqual(widget_info["widget"].text(), "已关闭")
+                self.assertFalse(window.config[CONFIG_KEY_ENABLED])
+                self.assertEqual(window.config[CONFIG_KEY_LAST_DATE], "")
+                self.assertIn(CONFIG_KEY_ENABLED, window._settings_snapshot_keys())
+                widget_info = window._setting_widgets.get(CONFIG_KEY_ENABLED)
+                self.assertIsNotNone(widget_info)
+                self.assertEqual(widget_info["type"], "toggle")
+                self.assertEqual(widget_info["widget"].text(), "已关闭")
+            finally:
+                app_module.CONFIG_FILE = original_config_file
 
 
 if __name__ == "__main__":

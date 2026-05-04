@@ -39,6 +39,7 @@ class StateMachine:
     STATE_FAILED = 4
     STATE_PAUSED = 5
     STATE_RECOVERING = 6
+    STATE_SELLING_CATCHES = 7
     
     def __init__(self, log_queue=None, debug_queue=None, config=None):
         self.log_queue = log_queue
@@ -72,6 +73,14 @@ class StateMachine:
         self.fishing_start_time = 0
         self.fishing_timeout = 180 # 3分钟超时防卡死
         self.fish_count = 0
+        self._auto_sell_session_catch_count = 0
+        self._auto_sell_pending = False
+        self._auto_sell_step = ""
+        self._auto_sell_step_started = 0
+        self._auto_sell_started_at = 0
+        self._auto_sell_last_log = 0
+        self._auto_sell_ready_wait_started = 0
+        self._auto_sell_capture_hidden = False
         
         # 实例化真正的 PID 控制器
         # Kp: 比例，影响追赶速度
@@ -107,6 +116,7 @@ class StateMachine:
             "user_takeover_protection": True,
             "user_takeover_mouse_threshold": 12,
             "user_takeover_start_grace": 1.20,
+            "auto_sell_catch_threshold": 0,
         }
         self._asset_template_cache = {}
         
@@ -141,6 +151,150 @@ class StateMachine:
     def _note_program_input(self, keys=(), duration=0.45):
         if getattr(self, "user_activity", None) is not None:
             self.user_activity.note_program_input(keys, duration=duration)
+
+    def _auto_sell_threshold(self):
+        try:
+            threshold = int(float(self.config.get("auto_sell_catch_threshold", 0)))
+        except (TypeError, ValueError):
+            threshold = 0
+        return max(0, min(threshold, 999))
+
+    def _reset_auto_sell_runtime(self):
+        self._auto_sell_session_catch_count = 0
+        self._auto_sell_pending = False
+        self._auto_sell_step = ""
+        self._auto_sell_step_started = 0
+        self._auto_sell_started_at = 0
+        self._auto_sell_last_log = 0
+        self._auto_sell_ready_wait_started = 0
+
+    def _set_auto_sell_capture_hidden(self, hidden):
+        hidden = bool(hidden)
+        if getattr(self, "_auto_sell_capture_hidden", False) == hidden:
+            return
+        self._auto_sell_capture_hidden = hidden
+        if self.log_queue:
+            self.log_queue.put("CMD_FLOATING_HIDE_FOR_CAPTURE" if hidden else "CMD_FLOATING_RESTORE_AFTER_CAPTURE")
+
+    def _record_auto_sell_catch(self):
+        self._auto_sell_session_catch_count = int(getattr(self, "_auto_sell_session_catch_count", 0)) + 1
+        threshold = self._auto_sell_threshold()
+        if threshold <= 0:
+            return
+        if self._auto_sell_session_catch_count >= threshold and not getattr(self, "_auto_sell_pending", False):
+            self._auto_sell_pending = True
+            self._auto_sell_ready_wait_started = 0
+            self._log(f"[售鱼] 本次运行已累计钓获 {self._auto_sell_session_catch_count} 条，达到自动售鱼阈值，等待回到可抛竿界面后出售鱼获。")
+
+    def _auto_sell_fish_cabin_templates(self):
+        return self._resolve_asset_templates(
+            "auto_sell_fish_cabin",
+            exact_names=("鱼获出售界面点击鱼舱按钮.png",),
+        )
+
+    def _auto_sell_one_click_templates(self):
+        return self._resolve_asset_templates(
+            "auto_sell_one_click",
+            exact_names=("鱼获出售界面鱼舱子界面一键出售按钮.png",),
+        )
+
+    def _auto_sell_confirm_templates(self):
+        return self._resolve_asset_templates(
+            "auto_sell_confirm",
+            exact_names=("鱼获出售界面鱼舱子界面一键出售后确认弹窗的确认按钮.png",),
+        )
+
+    def _client_point_to_screen(self, rect, roi, loc):
+        abs_roi = self.sc.relative_rect(rect, *roi) if self.sc is not None else None
+        if abs_roi is None or loc is None:
+            return None
+        return abs_roi[0] + int(loc[0]), abs_roi[1] + int(loc[1])
+
+    def _click_screen_point_if_running(self, x, y, duration=0.05):
+        with self._input_lock:
+            if self._should_stop():
+                return False
+            if self.wm.is_foreground() and self._check_user_takeover():
+                return False
+            self._note_program_input(("mouse_left",), duration=float(duration) + 0.65)
+            return self.ctrl.mouse_click(x, y, duration=duration)
+
+    def _match_auto_sell_template(self, rect, templates, rois):
+        if self.sc is None or not rect or not templates:
+            return None
+        best = None
+        strategies = (
+            {"name": "sell-gray-mask", "threshold": 0.70, "use_mask": True, "mask_threshold": 6, "early_accept": 0.92},
+            {"name": "sell-edge", "threshold": 0.58, "use_edge": True, "early_accept": 0.86},
+            {"name": "sell-plain", "threshold": 0.72, "early_accept": 0.93},
+        )
+        for roi in rois:
+            image = self.sc.capture_relative(rect, *roi)
+            if image is None:
+                continue
+            loc, conf, matched_path, strategy = self.vis.find_best_template_multi_strategy(
+                image,
+                templates,
+                strategies,
+                threshold=0.68,
+                scale_range=self._template_scale_range(rect, 0.50, 1.85),
+                scale_steps=13,
+            )
+            if best is None or float(conf or 0.0) > best.get("confidence", 0.0):
+                best = {
+                    "location": loc,
+                    "confidence": float(conf or 0.0),
+                    "template": matched_path,
+                    "strategy": strategy,
+                    "roi": roi,
+                }
+            if loc and conf >= 0.92:
+                break
+        if best and best.get("location"):
+            point = self._client_point_to_screen(rect, best["roi"], best["location"])
+            if point:
+                best["screen_point"] = point
+                return best
+        return best
+
+    def _set_auto_sell_step(self, step):
+        self._auto_sell_step = step
+        self._auto_sell_step_started = time.time()
+
+    def _start_auto_sell_flow(self, rect, ready_info):
+        if not getattr(self, "_auto_sell_pending", False):
+            return False
+        self._set_auto_sell_capture_hidden(True)
+        self._log("[售鱼] 已回到钓鱼初始界面，正在按 Q 进入鱼获出售界面。")
+        if not self._tap_key_if_running("q", duration=0.12):
+            self._set_auto_sell_capture_hidden(False)
+            return False
+        self.current_state = self.STATE_SELLING_CATCHES
+        self._auto_sell_started_at = time.time()
+        self._set_auto_sell_step("fish_cabin")
+        return True
+
+    def _finish_auto_sell_flow(self):
+        self._auto_sell_session_catch_count = 0
+        self._auto_sell_pending = False
+        self._auto_sell_step = ""
+        self._auto_sell_ready_wait_started = 0
+        self._set_auto_sell_capture_hidden(False)
+        self._log("[售鱼] 已完成一键出售鱼获，继续自动钓鱼。")
+        self.current_state = self.STATE_IDLE
+
+    def _fail_auto_sell_flow(self, reason, press_esc=True, rect=None):
+        self._log(f"[售鱼] {reason}，本次自动售鱼停止，避免继续误操作。")
+        if press_esc and not self._should_stop():
+            ready_info = self._detect_ready_to_cast(rect, allow_heavy=False, require_initial_controls=True) if rect else None
+            if not (ready_info and ready_info.get("location")):
+                self._tap_key_if_running("esc", duration=0.12)
+        self._auto_sell_session_catch_count = 0
+        self._auto_sell_pending = False
+        self._auto_sell_step = ""
+        self._auto_sell_ready_wait_started = 0
+        self._set_auto_sell_capture_hidden(False)
+        self.current_state = self.STATE_IDLE
 
     def _record_runtime_for_current_run(self):
         if self.start_timestamp > 0:
@@ -184,6 +338,7 @@ class StateMachine:
         self.is_running = True
         self.current_state = self.STATE_IDLE
         self._reset_round_state()
+        self._reset_auto_sell_runtime()
         self.user_activity.reset()
         self.start_timestamp = time.time()
         self._log("钓鱼脚本启动中，正在寻找游戏窗口...")
@@ -199,6 +354,7 @@ class StateMachine:
             self._stop_requested = True
             self.is_running = False
             self.ctrl.release_all()
+        self._set_auto_sell_capture_hidden(False)
         self._log("[系统] 收到停止指令。")
         
         # 记录本次运行时长
@@ -862,7 +1018,7 @@ class StateMachine:
             "initial_controls": initial_cluster,
         }
 
-    def _enter_recovering(self, reason, record_empty=False, press_esc=False, allow_second_esc=True):
+    def _enter_recovering(self, reason, record_empty=False, press_esc=False, allow_second_esc=False):
         self.ctrl.release_all()
         if record_empty:
             self.record_mgr.add_empty_catch()
@@ -1883,19 +2039,26 @@ class StateMachine:
         return "、".join(unique)
 
     def _save_unknown_settlement_debug(self, rect, name_rois):
-        if not self.config.get("debug_mode", False) or self.sc is None:
+        if self.sc is None:
             return
         timestamp = time.strftime("%Y%m%d_%H%M%S")
+        screenshot_dir = Path("screenshot")
+        try:
+            screenshot_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            screenshot_dir = Path(".")
         full_image = self.sc.capture_relative(rect, 0, 0, 1, 1)
         if full_image is not None and full_image.size > 0:
-            path = f"debug_settlement_unknown_{timestamp}.png"
-            cv2.imwrite(path, full_image)
+            path = screenshot_dir / f"debug_settlement_unknown_{timestamp}.png"
+            cv2.imwrite(str(path), full_image)
             self._log(f"[排错] 已保存未知鱼类结算截图: {path}")
+        if not self.config.get("debug_mode", False):
+            return
         for index, roi in enumerate(name_rois, start=1):
             roi_image = self.sc.capture_relative(rect, *roi)
             if roi_image is not None and roi_image.size > 0:
-                path = f"debug_settlement_unknown_name_roi_{timestamp}_{index}.png"
-                cv2.imwrite(path, roi_image)
+                path = screenshot_dir / f"debug_settlement_unknown_name_roi_{timestamp}_{index}.png"
+                cv2.imwrite(str(path), roi_image)
 
     def _read_settlement_info(self, rect, save_unknown_debug=True):
         fish_name = ""
@@ -2055,11 +2218,14 @@ class StateMachine:
                 self._handle_failed()
             elif self.current_state == self.STATE_RECOVERING:
                 self._handle_recovering(rect)
+            elif self.current_state == self.STATE_SELLING_CATCHES:
+                self._handle_auto_sell(rect)
                 
             # 控制基础循环帧率
             if not self._sleep_interruptible(0.01, step=0.01):
                 break
             
+        self._set_auto_sell_capture_hidden(False)
         self.sc.close()
 
     def _handle_idle(self, rect, roi):
@@ -2076,6 +2242,21 @@ class StateMachine:
             return
         
         if ready_info and ready_info.get("location"):
+            if getattr(self, "_auto_sell_pending", False) and self._auto_sell_threshold() > 0:
+                strict_ready = self._detect_ready_to_cast(rect, allow_heavy=False, require_initial_controls=True)
+                if strict_ready and strict_ready.get("location"):
+                    if self._start_auto_sell_flow(rect, strict_ready):
+                        return
+                else:
+                    now = time.time()
+                    if not getattr(self, "_auto_sell_ready_wait_started", 0):
+                        self._auto_sell_ready_wait_started = now
+                        self._log("[售鱼] 已达到自动售鱼阈值，但尚未确认钓鱼初始界面组合控件，暂缓抛竿并继续确认。")
+                    if now - self._auto_sell_ready_wait_started < 4.0:
+                        self._sleep_interruptible(0.18)
+                        return
+                    self._log("[售鱼] 暂未确认可安全进入售鱼界面，本轮先继续钓鱼，后续回到初始界面再尝试。")
+                    self._auto_sell_ready_wait_started = 0
             if not self._send_cast_input(ready_info, "待机"):
                 return
             if self._should_stop():
@@ -2105,6 +2286,109 @@ class StateMachine:
                 conf = ready_info.get("confidence") if ready_info else 0.0
                 self._log(f"[排错] 抛竿图标匹配失败，最高置信度: {conf:.2f}。已保存当前截图至根目录 debug_f_btn_roi.png")
             self._sleep_interruptible(0.18)
+
+    def _handle_auto_sell(self, rect):
+        if self._should_stop():
+            return
+
+        now = time.time()
+        total_elapsed = now - float(getattr(self, "_auto_sell_started_at", now) or now)
+        if total_elapsed > 55.0:
+            self._fail_auto_sell_flow("自动售鱼流程超时", rect=rect)
+            return
+
+        step = getattr(self, "_auto_sell_step", "")
+        step_elapsed = now - float(getattr(self, "_auto_sell_step_started", now) or now)
+
+        if step == "fish_cabin":
+            if step_elapsed < 0.7:
+                return
+            info = self._match_auto_sell_template(
+                rect,
+                self._auto_sell_fish_cabin_templates(),
+                ((0.0, 0.0, 1.0, 1.0),),
+            )
+            if info and info.get("screen_point"):
+                x, y = info["screen_point"]
+                if self._click_screen_point_if_running(x, y, duration=0.06):
+                    self._log("[售鱼] 已点击鱼舱按钮。")
+                    self._set_auto_sell_step("one_click")
+                return
+            if step_elapsed > 9.0:
+                best_conf = (info or {}).get("confidence", 0.0)
+                self._fail_auto_sell_flow(f"未能定位鱼舱按钮，最高置信度: {best_conf:.2f}", rect=rect)
+            return
+
+        if step == "one_click":
+            if step_elapsed < 0.5:
+                return
+            info = self._match_auto_sell_template(
+                rect,
+                self._auto_sell_one_click_templates(),
+                ((0.0, 0.0, 1.0, 1.0),),
+            )
+            if info and info.get("screen_point"):
+                x, y = info["screen_point"]
+                if self._click_screen_point_if_running(x, y, duration=0.06):
+                    self._log("[售鱼] 已点击一键出售按钮。")
+                    self._set_auto_sell_step("confirm")
+                return
+            if step_elapsed > 9.0:
+                best_conf = (info or {}).get("confidence", 0.0)
+                self._fail_auto_sell_flow(f"未能定位一键出售按钮，最高置信度: {best_conf:.2f}", rect=rect)
+            return
+
+        if step == "confirm":
+            if step_elapsed < 0.4:
+                return
+            info = self._match_auto_sell_template(
+                rect,
+                self._auto_sell_confirm_templates(),
+                (
+                    (0.20, 0.35, 0.60, 0.45),
+                    (0.0, 0.0, 1.0, 1.0),
+                ),
+            )
+            if info and info.get("screen_point"):
+                x, y = info["screen_point"]
+                if self._click_screen_point_if_running(x, y, duration=0.06):
+                    self._log("[售鱼] 已点击一键出售确认按钮，等待鱼获处理完成。")
+                    self._set_auto_sell_step("wait_after_confirm")
+                return
+            if step_elapsed > 8.0:
+                best_conf = (info or {}).get("confidence", 0.0)
+                self._fail_auto_sell_flow(f"未能定位一键出售确认按钮，最高置信度: {best_conf:.2f}", rect=rect)
+            return
+
+        if step == "wait_after_confirm":
+            if step_elapsed < 2.0:
+                return
+            if not self._tap_key_if_running("esc", duration=0.12):
+                return
+            self._log("[售鱼] 已发送第一次 ESC，准备退出售鱼界面。")
+            self._set_auto_sell_step("second_esc")
+            return
+
+        if step == "second_esc":
+            if step_elapsed < 0.45:
+                return
+            if not self._tap_key_if_running("esc", duration=0.12):
+                return
+            self._log("[售鱼] 已发送第二次 ESC，正在确认回到钓鱼初始界面。")
+            self._set_auto_sell_step("verify_ready")
+            return
+
+        if step == "verify_ready":
+            ready_info = self._detect_ready_to_cast(rect, allow_heavy=False, require_initial_controls=True)
+            if ready_info and ready_info.get("location"):
+                self._finish_auto_sell_flow()
+                return
+            if step_elapsed > 5.0:
+                self._log("[售鱼] 售鱼后暂未确认初始界面，不再追加 ESC，回到待机流程继续扫描。")
+                self._finish_auto_sell_flow()
+            return
+
+        self._fail_auto_sell_flow("自动售鱼步骤异常", press_esc=False)
 
     def _handle_waiting(self, rect, roi):
         # 每隔一小段时间检测一次即可，不需要过高频率
@@ -2152,7 +2436,7 @@ class StateMachine:
         wait_timeout = max(20, min(int(self.config.get("hook_wait_timeout", 90)), 300))
         if now - self._waiting_start_time > wait_timeout:
             self._log(f"[等待] 超过 {wait_timeout} 秒未识别到上钩提示，释放按键并回到待机重新检测。")
-            self._enter_recovering("抛竿后长时间未识别到上钩提示", record_empty=True, press_esc=True)
+            self._enter_recovering("抛竿后长时间未识别到上钩提示", record_empty=True, press_esc=False)
             return
 
         cast_retry_delay = max(6.0, min(float(self.config.get("cast_retry_delay", 8)), 30.0))
@@ -2243,7 +2527,7 @@ class StateMachine:
                 pre_control_timeout = max(10.0, min(float(self.config.get("pre_control_timeout", 14)), 30.0))
                 if transition_elapsed > pre_control_timeout:
                     self._log(f"[溜鱼] 上钩后 {pre_control_timeout:.0f} 秒仍未进入有效溜鱼控制，进入恢复流程。")
-                    self._enter_recovering("上钩后长时间未进入有效溜鱼控制", record_empty=True, press_esc=True)
+                    self._enter_recovering("上钩后长时间未进入有效溜鱼控制", record_empty=True, press_esc=False)
                 return
 
             if not getattr(self, '_confirmed_fishing_bar', False):
@@ -2258,7 +2542,7 @@ class StateMachine:
                     return
                 if transition_elapsed > 5.0:
                     self._log("[溜鱼] 长时间未检测到耐力条，进入结果判定...")
-                    self._enter_recovering("上钩后长时间未出现耐力条", record_empty=True, press_esc=True)
+                    self._enter_recovering("上钩后长时间未出现耐力条", record_empty=True, press_esc=False)
                 return
 
             # 引入容错：偶尔一帧没识别到不算结束，连续丢失超过用户设定才算结束
@@ -2965,6 +3249,7 @@ class StateMachine:
                 return
             self.record_mgr.add_catch(fish_name, weight_g)
             self.fish_count += 1
+            self._record_auto_sell_catch()
             self._success_recorded_pending_close = True
             if getattr(self, "_stop_requested", False):
                 return
@@ -3053,7 +3338,7 @@ class StateMachine:
                     return
                 if success_info:
                     self._log("[结算] 成功结算界面多次 ESC 后仍未确认关闭，进入恢复流程继续处理。")
-                    self._enter_recovering("成功结算界面关闭未确认", record_empty=False, press_esc=True)
+                    self._enter_recovering("成功结算界面关闭未确认", record_empty=False, press_esc=False)
                     return
                 self._log("[结算] 已发送 ESC 关闭结算，且未再确认结算界面仍存在；为避免重复 ESC 退出钓鱼界面，返回待机继续扫描。")
                 self._reset_round_state()
@@ -3107,7 +3392,7 @@ class StateMachine:
 
         # 如果试了多次还是不行，就强行重置，避免脚本卡死在这个状态
         self._log("[警告] 结算超时，强制返回待机状态。")
-        self._enter_recovering("结算判定超时", record_empty=False, press_esc=True)
+        self._enter_recovering("结算判定超时", record_empty=False, press_esc=False)
 
     def _handle_recovering(self, rect):
         if self._should_stop():
@@ -3118,19 +3403,19 @@ class StateMachine:
         now = time.time()
         elapsed = now - self._recovery_start_time
 
+        ready_info = self._detect_ready_to_cast(rect, allow_heavy=(elapsed >= 2.0), require_initial_controls=True)
+        if ready_info and ready_info.get("location"):
+            self._log(f"[恢复] 已检测到{ready_info.get('kind') or '可抛钩提示'}，恢复到待机流程。")
+            self._reset_round_state()
+            self.current_state = self.STATE_IDLE
+            return
+
         if getattr(self, "_recovery_esc_requested", False) and not getattr(self, "_recovery_esc_sent", False):
             self.ctrl.release_all()
             if not self._tap_key_if_running('esc', duration=0.15):
                 return
             self._recovery_esc_sent = True
             self._sleep_interruptible(0.35)
-            return
-
-        ready_info = self._detect_ready_to_cast(rect, allow_heavy=(elapsed >= 2.0), require_initial_controls=True)
-        if ready_info and ready_info.get("location"):
-            self._log(f"[恢复] 已检测到{ready_info.get('kind') or '可抛钩提示'}，恢复到待机流程。")
-            self._reset_round_state()
-            self.current_state = self.STATE_IDLE
             return
 
         if (

@@ -2693,6 +2693,7 @@ class AppWindow(QMainWindow):
             "log_line_limit": 320,
             "auto_switch_to_log": True,
             "debug_mode": False,
+            "auto_sell_catch_threshold": 0,
             **MONTHLY_CARD_RESET_DEFAULT_CONFIG,
             "sponsor_button_hidden": False,
             "sponsor_qr_dir": "sponsor_qr",
@@ -2930,6 +2931,7 @@ class AppWindow(QMainWindow):
         self.sm.update_config("user_takeover_mouse_threshold", self.config.get("user_takeover_mouse_threshold", 12))
         self.sm.update_config("user_takeover_start_grace", self.config.get("user_takeover_start_grace", 1.20))
         self.sm.update_config("debug_mode", self.config.get("debug_mode", False))
+        self.sm.update_config("auto_sell_catch_threshold", self.config.get("auto_sell_catch_threshold", 0))
 
     def _refresh_debug_view_state(self):
         if not hasattr(self, "debug_preview"):
@@ -3974,6 +3976,25 @@ class AppWindow(QMainWindow):
         timing_keys.append("recovery_timeout")
         timing_layout.addStretch()
         self._add_settings_category("流程与超时", timing_page, timing_keys)
+
+        auto_sell_page, auto_sell_layout = self._build_settings_category_page(
+            "自动售鱼",
+            "达到设定钓获数量后，程序会在下一次回到可抛竿界面时进入鱼获出售界面并执行一键出售。设为 0 表示关闭。",
+        )
+        auto_sell_keys = []
+        self.slider_auto_sell_threshold = self._settings_block(
+            auto_sell_layout,
+            "累计钓获自动售鱼",
+            "从点击开始钓鱼后开始计数；达到该数量后只会在确认钓鱼初始界面时触发售鱼，避免在结算、溜鱼或异常恢复中误操作。",
+            self.config.get("auto_sell_catch_threshold", 0),
+            0,
+            999,
+            "auto_sell_catch_threshold",
+            display_suffix="条",
+        )
+        auto_sell_keys.append("auto_sell_catch_threshold")
+        auto_sell_layout.addStretch()
+        self._add_settings_category("自动售鱼", auto_sell_page, auto_sell_keys)
 
         monthly_card_page, monthly_card_layout = self._build_settings_category_page(
             "月卡复位",

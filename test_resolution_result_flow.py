@@ -1,5 +1,7 @@
 import time
 import unittest
+import os
+import tempfile
 from pathlib import Path
 
 import cv2
@@ -143,6 +145,44 @@ class ResultTextProbeMachine(StateMachine):
         return True
 
 
+class ResultTimeoutMachine(StateMachine):
+    def __init__(self):
+        super().__init__(config={"result_detect_timeout": 6})
+        self.is_running = True
+        self.current_state = self.STATE_RESULT
+        self.clock = 100.0
+        self.keys = []
+
+    def _detect_fast_success_result(self, rect, fast_only=False):
+        return None
+
+    def _detect_fast_failed_result(self, rect):
+        return None
+
+    def _detect_success_result(self, rect):
+        return None
+
+    def _detect_failed_result(self, rect):
+        return None
+
+    def _maybe_finish_failed_result(self, rect, failed_info, source_label="结算"):
+        return False
+
+    def _try_finish_success_by_settlement_probe(self, rect, source_label="结算"):
+        return False
+
+    def _detect_ready_to_cast(self, rect, allow_heavy=False, require_initial_controls=False, include_f=True, include_prepare_ui=False):
+        return None
+
+    def _sleep_interruptible(self, seconds, step=0.05):
+        self.clock += max(float(seconds), 0.0)
+        return True
+
+    def _tap_key_if_running(self, key, duration=0.01):
+        self.keys.append((key, duration))
+        return True
+
+
 class CloseRetryController:
     def __init__(self):
         self.keys = []
@@ -187,6 +227,38 @@ class PendingSettlementCloseMachine(StateMachine):
 
     def _sleep_interruptible(self, seconds, step=0.05):
         return True
+
+
+class RecoveringReadyFirstMachine(StateMachine):
+    def __init__(self, ready=True):
+        super().__init__(config={})
+        self.is_running = True
+        self.current_state = self.STATE_RECOVERING
+        self._recovery_start_time = 100.0
+        self._recovery_esc_requested = True
+        self._recovery_esc_sent = False
+        self._recovery_second_esc_sent = False
+        self._recovery_allow_second_esc = False
+        self.ready = ready
+        self.clock = 100.1
+        self.keys = []
+
+    def _detect_ready_to_cast(self, rect, allow_heavy=False, require_initial_controls=False, include_f=True, include_prepare_ui=False):
+        if not self.ready:
+            return None
+        return {"kind": "钓鱼初始界面", "location": (1, 1), "confidence": 0.99}
+
+    def _tap_key_if_running(self, key, duration=0.01):
+        self.keys.append((key, duration))
+        return True
+
+    def _sleep_interruptible(self, seconds, step=0.05):
+        return True
+
+
+class UnknownSettlementCapture:
+    def capture_relative(self, rect, *roi):
+        return np.full((80, 120, 3), 180, dtype=np.uint8)
 
 
 class BarMissingAfterProbeMachine(StateMachine):
@@ -286,6 +358,74 @@ class ResolutionResultFlowTest(unittest.TestCase):
         machine._handle_result((0, 0, 1920, 1080))
 
         self.assertTrue(machine.probe_called)
+
+    def test_result_timeout_enters_recovery_without_escape(self):
+        machine = ResultTimeoutMachine()
+
+        import core.state_machine as state_machine_module
+
+        original_time = state_machine_module.time.time
+        state_machine_module.time.time = lambda: machine.clock
+        try:
+            machine._handle_result((0, 0, 1920, 1080))
+        finally:
+            state_machine_module.time.time = original_time
+
+        self.assertEqual(machine.current_state, machine.STATE_RECOVERING)
+        self.assertFalse(machine._recovery_esc_requested)
+        self.assertFalse(machine._recovery_allow_second_esc)
+        self.assertEqual(machine.keys, [])
+
+    def test_recovering_checks_ready_before_first_escape(self):
+        machine = RecoveringReadyFirstMachine(ready=True)
+
+        import core.state_machine as state_machine_module
+
+        original_time = state_machine_module.time.time
+        state_machine_module.time.time = lambda: machine.clock
+        try:
+            machine._handle_recovering((0, 0, 1920, 1080))
+        finally:
+            state_machine_module.time.time = original_time
+
+        self.assertEqual(machine.current_state, machine.STATE_IDLE)
+        self.assertEqual(machine.keys, [])
+
+    def test_recovering_default_does_not_send_second_escape(self):
+        machine = RecoveringReadyFirstMachine(ready=False)
+        machine._recovery_esc_sent = True
+        machine.clock = 104.0
+
+        import core.state_machine as state_machine_module
+
+        original_time = state_machine_module.time.time
+        state_machine_module.time.time = lambda: machine.clock
+        try:
+            machine._handle_recovering((0, 0, 1920, 1080))
+        finally:
+            state_machine_module.time.time = original_time
+
+        self.assertEqual(machine.keys, [])
+        self.assertFalse(machine._recovery_second_esc_sent)
+
+    def test_unknown_settlement_saves_full_screenshot_even_without_debug_mode(self):
+        machine = StateMachine(config={"debug_mode": False})
+        machine.sc = UnknownSettlementCapture()
+
+        import core.state_machine as state_machine_module
+
+        original_strftime = state_machine_module.time.strftime
+        original_cwd = os.getcwd()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.chdir(tmpdir)
+            state_machine_module.time.strftime = lambda fmt: "20260504_010203"
+            try:
+                machine._save_unknown_settlement_debug((0, 0, 1920, 1080), [])
+            finally:
+                state_machine_module.time.strftime = original_strftime
+                os.chdir(original_cwd)
+
+            self.assertTrue(Path(tmpdir, "screenshot", "debug_settlement_unknown_20260504_010203.png").exists())
 
     def test_recorded_success_does_not_retry_esc_without_visible_settlement(self):
         machine = PendingSettlementCloseMachine(settlement_visible=False)
