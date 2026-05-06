@@ -1,4 +1,4 @@
-import html
+﻿import html
 import json
 import os
 import queue
@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QPlainTextEdit,
     QProgressBar,
@@ -29,6 +30,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from core.auth_client import AuthClient, AuthClientError, auth_check_interval_seconds, auth_config_required, auth_offline_grace_seconds, decide_cached_authorization
+from core.auth_device import build_device_hash, get_or_create_install_id
+from core.auth_policy import get_auth_base_url
+from core.auth_store import AuthState, load_auth_state, save_auth_state
 from core.paths import ensure_writable_file, resource_path
 from core.monthly_card_reset import (
     CONFIG_KEY_ENABLED as MONTHLY_CARD_RESET_ENABLED_KEY,
@@ -219,15 +224,17 @@ class TitleButton(QPushButton):
 class PulseTitleActionButton(QPushButton):
     closeRequested = Signal()
 
-    def __init__(self, kind, text, tone, has_close=False, parent=None):
+    def __init__(self, kind, text, tone, has_close=False, parent=None, auto_width=False, min_width=None):
         super().__init__("", parent)
         self.kind = kind
         self.label = text
         self.tone = tone
         self.has_close = bool(has_close)
+        self.auto_width = bool(auto_width)
+        self.min_width = int(min_width or (220 if self.has_close else 76))
         self.glow_value = 0.0
         self._close_pressed = False
-        self.setFixedSize(220 if self.has_close else 76, 34)
+        self.setFixedSize(self.min_width, 34)
         self.setCursor(Qt.PointingHandCursor)
         self.setFocusPolicy(Qt.NoFocus)
         self.setAttribute(Qt.WA_Hover, True)
@@ -240,6 +247,24 @@ class PulseTitleActionButton(QPushButton):
         self._animation.setLoopCount(-1)
         self._animation.valueChanged.connect(self._set_glow_value)
         self._animation.start()
+        self._fit_to_label()
+
+    def set_label(self, text, tone=None, tooltip=None):
+        self.label = str(text or "")
+        if tone:
+            self.tone = tone
+        if tooltip is not None:
+            self.setToolTip(str(tooltip or ""))
+        self._fit_to_label()
+        self.update()
+
+    def _fit_to_label(self):
+        if not self.auto_width:
+            return
+        text_width = self.fontMetrics().horizontalAdvance(self.label)
+        close_width = 25 if self.has_close else 0
+        target_width = max(self.min_width, text_width + 48 + close_width)
+        self.setFixedWidth(target_width)
 
     def _set_glow_value(self, value):
         self.glow_value = float(value)
@@ -292,6 +317,30 @@ class PulseTitleActionButton(QPushButton):
                 QColor(230, 174, 102, int(132 + pulse * 105)),
                 QColor(255, 228, 187),
             )
+        if self.tone == "auth_ok":
+            return (
+                QColor(32, 142, 91, int(48 + pulse * 68)),
+                QColor(94, 234, 154, int(120 + pulse * 110)),
+                QColor(220, 255, 236),
+            )
+        if self.tone == "auth_pending":
+            return (
+                QColor(142, 106, 32, int(48 + pulse * 68)),
+                QColor(250, 204, 82, int(120 + pulse * 110)),
+                QColor(255, 246, 203),
+            )
+        if self.tone == "auth_bad":
+            return (
+                QColor(145, 51, 77, int(48 + pulse * 68)),
+                QColor(251, 113, 133, int(120 + pulse * 110)),
+                QColor(255, 228, 233),
+            )
+        if self.tone == "auth_offline":
+            return (
+                QColor(47, 98, 152, int(48 + pulse * 68)),
+                QColor(125, 211, 252, int(120 + pulse * 110)),
+                QColor(225, 245, 255),
+            )
         return (
             QColor(118, 80, 226, int(58 + pulse * 72)),
             QColor(191, 153, 255, int(132 + pulse * 105)),
@@ -310,6 +359,18 @@ class PulseTitleActionButton(QPushButton):
             painter.drawLine(12, 24, 25, 24)
             painter.drawArc(13, 7, 8, 8, 70 * 16, 85 * 16)
             painter.drawArc(19, 7, 8, 8, 70 * 16, 85 * 16)
+        elif self.kind == "auth":
+            shield = QPainterPath()
+            shield.moveTo(20, 8)
+            shield.lineTo(29, 12)
+            shield.lineTo(27, 23)
+            shield.lineTo(20, 28)
+            shield.lineTo(13, 23)
+            shield.lineTo(11, 12)
+            shield.closeSubpath()
+            painter.drawPath(shield)
+            painter.drawLine(16, 18, 19, 21)
+            painter.drawLine(19, 21, 25, 15)
         else:
             painter.drawEllipse(11, 11, 7, 7)
             painter.drawEllipse(21, 11, 7, 7)
@@ -659,6 +720,7 @@ class CustomTitleBar(QFrame):
         self.btn_about = TitleButton("about", "rgba(29, 208, 214, 0.18)")
         self.btn_coffee = PulseTitleActionButton("coffee", "请作者喝一点咖啡吗？", "coffee", has_close=True)
         self.btn_qq = PulseTitleActionButton("qq", "Q群", "purple")
+        self.btn_auth = PulseTitleActionButton("auth", "未授权", "auth_bad", auto_width=True, min_width=92)
         self.btn_min = TitleButton("min", "rgba(90, 129, 166, 0.22)")
         self.btn_max = TitleButton("max", "rgba(90, 129, 166, 0.22)")
         self.btn_close = TitleButton("close", "rgba(255, 102, 126, 0.58)")
@@ -666,6 +728,7 @@ class CustomTitleBar(QFrame):
         self.btn_about.setToolTip("关于")
         self.btn_coffee.setToolTip("请作者喝一点咖啡吗？")
         self.btn_qq.setToolTip("加入 QQ 群")
+        self.btn_auth.setToolTip("查看来源验证状态")
         self.btn_min.clicked.connect(self.window_ref.showMinimized)
         self.btn_max.clicked.connect(self.window_ref.toggle_maximize_restore)
         self.btn_close.clicked.connect(self.window_ref.close)
@@ -673,14 +736,17 @@ class CustomTitleBar(QFrame):
         self.btn_coffee.clicked.connect(self.window_ref.show_sponsor_dialog)
         self.btn_coffee.closeRequested.connect(self.window_ref.confirm_hide_sponsor_button)
         self.btn_qq.clicked.connect(self.window_ref.show_qq_group_dialog)
+        self.btn_auth.clicked.connect(self.window_ref.show_authorization_status)
 
         layout.addWidget(self.btn_coffee)
         layout.addWidget(self.btn_qq)
+        layout.addWidget(self.btn_auth)
         layout.addWidget(self.btn_about)
         layout.addWidget(self.btn_min)
         layout.addWidget(self.btn_max)
         layout.addWidget(self.btn_close)
         self.sync_sponsor_visibility()
+        self.sync_auth_status()
 
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -707,10 +773,18 @@ class CustomTitleBar(QFrame):
     def sync_state(self):
         self.btn_max.set_kind("restore" if self.window_ref.isMaximized() else "max")
         self.sync_sponsor_visibility()
+        self.sync_auth_status()
 
     def sync_sponsor_visibility(self):
         hidden = bool(getattr(self.window_ref, "config", {}).get("sponsor_button_hidden", False))
         self.btn_coffee.setVisible(not hidden)
+
+    def sync_auth_status(self):
+        if hasattr(self.window_ref, "_auth_title_status"):
+            text, tone, tooltip = self.window_ref._auth_title_status()
+        else:
+            text, tone, tooltip = "未授权", "auth_bad", "查看来源验证状态"
+        self.btn_auth.set_label(text, tone=tone, tooltip=tooltip)
 
 
 class StatusChip(QLabel):
@@ -822,6 +896,570 @@ class UpdateDownloadWorker(QThread):
                 self.completed.emit(False, "", cancel_message)
             else:
                 self.completed.emit(False, "", str(exc))
+
+
+class AuthCheckWorker(QThread):
+    completed = Signal(bool, object, str, bool)
+
+    def __init__(self, base_url, state, device_hash, parent=None):
+        super().__init__(parent)
+        self.base_url = base_url
+        self.state = state
+        self.device_hash = device_hash
+
+    def run(self):
+        if not self.state.access_token:
+            self.completed.emit(False, self.state, "尚未绑定授权", False)
+            return
+        try:
+            result = AuthClient(self.base_url, timeout=8).check_entitlement(self.state.access_token, self.device_hash)
+            if self.isInterruptionRequested():
+                return
+            if result.get("authorized"):
+                updated = AuthState(
+                    status="authorized",
+                    access_token=self.state.access_token,
+                    license_id=str(result.get("license_id") or self.state.license_id or ""),
+                    device_hash=self.device_hash,
+                    qq_user_id_hash=str(result.get("qq_user_id_hash") or self.state.qq_user_id_hash or ""),
+                    expires_at=float(result.get("expires_at") or self.state.expires_at or 0),
+                    last_checked_at=float(result.get("server_time") or time.time()),
+                    activation_id=self.state.activation_id,
+                    user_code=str(result.get("user_code") or self.state.user_code or ""),
+                    message="授权有效",
+                )
+                self.completed.emit(True, updated, "授权有效", False)
+                return
+            updated = AuthState.from_dict(self.state.to_dict())
+            updated.status = str(result.get("status") or "denied")
+            updated.message = str(result.get("message") or "授权校验未通过")
+            self.completed.emit(False, updated, updated.message, False)
+        except Exception as exc:
+            if not self.isInterruptionRequested():
+                self.completed.emit(False, self.state, f"授权服务器连接失败: {exc}", True)
+
+
+class AuthActivationWorker(QThread):
+    completed = Signal(str, bool, object, str)
+
+    def __init__(self, action, base_url, device_hash, install_id, app_version, activation_id="", parent=None):
+        super().__init__(parent)
+        self.action = action
+        self.base_url = base_url
+        self.device_hash = device_hash
+        self.install_id = install_id
+        self.app_version = app_version
+        self.activation_id = activation_id
+
+    def run(self):
+        try:
+            client = AuthClient(self.base_url, timeout=8)
+            if self.action == "start":
+                data = client.start_activation(self.device_hash, self.install_id, self.app_version)
+            else:
+                data = client.poll_activation(self.activation_id, self.device_hash)
+            if not self.isInterruptionRequested():
+                self.completed.emit(self.action, True, data, "")
+        except Exception as exc:
+            if not self.isInterruptionRequested():
+                self.completed.emit(self.action, False, {}, str(exc))
+
+
+class AuthPublicGroupsWorker(QThread):
+    completed = Signal(bool, object, str)
+
+    def __init__(self, base_url, parent=None):
+        super().__init__(parent)
+        self.base_url = base_url
+
+    def run(self):
+        try:
+            data = AuthClient(self.base_url, timeout=8).list_public_groups()
+            if not self.isInterruptionRequested():
+                self.completed.emit(True, data, "")
+        except Exception as exc:
+            if not self.isInterruptionRequested():
+                self.completed.emit(False, {}, str(exc))
+
+
+class AuthorizationDialog(QDialog):
+    def __init__(self, app_window):
+        super().__init__(app_window)
+        self.app_window = app_window
+        self.worker = None
+        self.group_worker = None
+        self.current_user_code = ""
+        self._bound_mode = False
+        self.poll_timer = QTimer(self)
+        self.poll_timer.setInterval(2500)
+        self.poll_timer.timeout.connect(self.poll_activation)
+        self.setModal(True)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.resize(720, 610)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(14, 14, 14, 14)
+
+        shell = QFrame()
+        shell.setStyleSheet(
+            f"""
+            QFrame {{
+                background-color: rgba(11, 22, 36, 0.98);
+                border: 1px solid rgba(89, 125, 164, 0.32);
+                border-radius: 26px;
+            }}
+            """
+        )
+        add_shadow(shell, blur=34, alpha=120, offset=(0, 14))
+        root.addWidget(shell)
+
+        layout = QVBoxLayout(shell)
+        layout.setContentsMargins(26, 24, 26, 24)
+        layout.setSpacing(14)
+
+        title = QLabel("来源验证")
+        title.setStyleSheet(
+            f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 28px; font-weight: 900;"
+        )
+        layout.addWidget(title)
+
+        note = QLabel("当前程序需要验证用户来自指定 QQ 群。请生成绑定码，并在指定群内发送 /bind 绑定码。群内机器人会协助完成绑定，发送 /yho help 可查看菜单。")
+        note.setWordWrap(True)
+        note.setStyleSheet(
+            f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 13px; line-height: 1.6;"
+        )
+        layout.addWidget(note)
+
+        self.binding_status_card = QLabel(self._binding_status_text())
+        self.binding_status_card.setWordWrap(True)
+        self.binding_status_card.setStyleSheet(
+            f"""
+            QLabel {{
+                background-color: rgba(29, 208, 214, 0.075);
+                border: 1px solid rgba(29, 208, 214, 0.22);
+                border-radius: 14px;
+                color: {APP_COLORS['text_soft']};
+                padding: 11px 13px;
+                font-size: 12px;
+                line-height: 1.5;
+            }}
+            """
+        )
+        layout.addWidget(self.binding_status_card)
+
+        self.code_label = QLabel("尚未生成绑定码")
+        self.code_label.setAlignment(Qt.AlignCenter)
+        self.code_label.setStyleSheet(
+            f"""
+            QLabel {{
+                background-color: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(29, 208, 214, 0.32);
+                border-radius: 18px;
+                color: {APP_COLORS['accent_soft']};
+                font-size: 26px;
+                font-weight: 900;
+                padding: 18px;
+            }}
+            """
+        )
+        layout.addWidget(self.code_label)
+
+        self.instruction_label = QLabel("点击“生成绑定码”后，将显示需要发送到 QQ 群的命令。")
+        self.instruction_label.setWordWrap(True)
+        self.instruction_label.setStyleSheet(
+            f"background: transparent; border: none; color: {APP_COLORS['text_soft']}; font-size: 12px;"
+        )
+        layout.addWidget(self.instruction_label)
+
+        self.status_label = QLabel("等待操作")
+        self.status_label.setWordWrap(True)
+        self.status_label.setStyleSheet(
+            f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 12px;"
+        )
+        layout.addWidget(self.status_label)
+
+        group_hint = QLabel("可加入的官方 QQ 群")
+        group_hint.setStyleSheet(
+            f"background: transparent; border: none; color: {APP_COLORS['accent_soft']}; font-size: 13px; font-weight: 900;"
+        )
+        layout.addWidget(group_hint)
+
+        self.group_scroll = QScrollArea()
+        self.group_scroll.setFrameShape(QFrame.NoFrame)
+        self.group_scroll.setWidgetResizable(True)
+        self.group_scroll.setFixedHeight(120)
+        self.group_scroll.setStyleSheet(scroll_area_stylesheet())
+        self.group_scroll.verticalScrollBar().setStyleSheet(scrollbar_stylesheet(compact=True))
+        self.group_container = QWidget()
+        self.group_layout = QVBoxLayout(self.group_container)
+        self.group_layout.setContentsMargins(0, 0, 0, 0)
+        self.group_layout.setSpacing(8)
+        self.group_scroll.setWidget(self.group_container)
+        layout.addWidget(self.group_scroll)
+        self._render_groups([], "正在加载群列表...")
+
+        actions = QHBoxLayout()
+        actions.addStretch()
+        self.copy_button = QPushButton("复制绑定码")
+        self.copy_button.setFocusPolicy(Qt.NoFocus)
+        self.copy_button.setEnabled(False)
+        self.copy_button.setStyleSheet(secondary_button_stylesheet())
+        self.copy_button.clicked.connect(self.copy_user_code)
+        actions.addWidget(self.copy_button)
+
+        self.start_button = QPushButton("生成绑定码")
+        self.start_button.setFocusPolicy(Qt.NoFocus)
+        self.start_button.setStyleSheet(primary_button_stylesheet())
+        self.start_button.clicked.connect(self.start_activation)
+        actions.addWidget(self.start_button)
+
+        self.close_button = QPushButton("稍后验证")
+        self.close_button.setFocusPolicy(Qt.NoFocus)
+        self.close_button.setStyleSheet(secondary_button_stylesheet())
+        self.close_button.clicked.connect(self.reject)
+        actions.addWidget(self.close_button)
+        layout.addLayout(actions)
+
+        self.refresh_auth_state_view()
+        self.refresh_groups()
+
+    def closeEvent(self, event):
+        self.poll_timer.stop()
+        self._stop_worker()
+        self._stop_group_worker()
+        super().closeEvent(event)
+
+    def reject(self):
+        self.poll_timer.stop()
+        self._stop_worker()
+        self._stop_group_worker()
+        super().reject()
+
+    def _stop_worker(self):
+        worker = self.worker
+        if worker is None:
+            return
+        try:
+            if worker.isRunning():
+                worker.requestInterruption()
+                worker.quit()
+                worker.wait(800)
+        except RuntimeError:
+            pass
+        self.worker = None
+
+    def _stop_group_worker(self):
+        worker = self.group_worker
+        if worker is None:
+            return
+        try:
+            if worker.isRunning():
+                worker.requestInterruption()
+                worker.quit()
+                worker.wait(800)
+        except RuntimeError:
+            pass
+        self.group_worker = None
+
+    def _set_busy(self, busy):
+        if getattr(self, "_bound_mode", False):
+            self.start_button.setEnabled(False)
+            return
+        self.start_button.setEnabled(not busy)
+
+    def _binding_status_text(self):
+        state = self.app_window.auth_state
+        title_text, _tone, tooltip = self.app_window._auth_title_status()
+        code = str(getattr(state, "user_code", "") or "").strip()
+        if self.app_window._auth_decision().allowed:
+            code_part = f"已绑定的绑定码：{code}。" if code else "正在从服务器同步绑定码。"
+        else:
+            code_part = f"当前绑定码：{code}。" if code else "当前没有待绑定的绑定码。"
+        return f"绑定状态：{title_text}。{code_part}在线复验固定 1 分钟一次，离线宽限固定 5 分钟。{tooltip}"
+
+    def _refresh_binding_status_card(self):
+        if hasattr(self, "binding_status_card"):
+            self.binding_status_card.setText(self._binding_status_text())
+
+    def refresh_auth_state_view(self):
+        state = self.app_window.auth_state
+        code = str(getattr(state, "user_code", "") or "").strip()
+        activation_id = str(getattr(state, "activation_id", "") or "").strip()
+        if self.app_window._auth_decision().allowed:
+            self._show_bound_code(code)
+            return
+        if state.access_token:
+            self.poll_timer.stop()
+            self._bound_mode = False
+            self.current_user_code = code
+            self.activation_id = ""
+            display_code = code or "正在从服务器同步..."
+            self.code_label.setText(f"已绑定的绑定码：{display_code}")
+            self.instruction_label.setText("本机已有授权记录，但当前在线复验未通过或已超过离线宽限。请先确认网络；若仍不可用，请点击“生成绑定码”重新绑定。")
+            self.status_label.setText(str(getattr(state, "message", "") or "授权暂不可用，请重新在线复验。"))
+            self.copy_button.setEnabled(bool(code))
+            self.start_button.setText("生成绑定码")
+            self.start_button.setToolTip("")
+            self.start_button.setEnabled(True)
+            self.close_button.setText("稍后验证")
+            self._refresh_binding_status_card()
+            return
+        if activation_id and code:
+            self._show_code(code, activation_id)
+            self.poll_timer.start()
+            return
+        self._bound_mode = False
+        self.current_user_code = ""
+        self.activation_id = ""
+        self.code_label.setText("尚未生成绑定码")
+        self.instruction_label.setText("点击“生成绑定码”后，将显示需要发送到 QQ 群的命令。")
+        self.status_label.setText("等待操作")
+        self.copy_button.setEnabled(False)
+        self.start_button.setText("生成绑定码")
+        self.start_button.setToolTip("")
+        self.start_button.setEnabled(True)
+        self.close_button.setText("稍后验证")
+        self._refresh_binding_status_card()
+
+    def _show_code(self, code, activation_id):
+        self._bound_mode = False
+        self.current_user_code = str(code or "")
+        self.code_label.setText(code)
+        self.instruction_label.setText(f"请在指定 QQ 群发送：/bind {code}。如不清楚机器人菜单，可在群里发送 /yho help。")
+        self.status_label.setText("已生成绑定码，正在等待 QQ 群验证。")
+        self.activation_id = activation_id
+        self.start_button.setText("生成绑定码")
+        self.start_button.setToolTip("")
+        self.start_button.setEnabled(True)
+        self.close_button.setText("稍后验证")
+        if hasattr(self, "copy_button"):
+            self.copy_button.setEnabled(bool(self.current_user_code))
+        self._refresh_binding_status_card()
+
+    def _show_bound_code(self, code):
+        self._bound_mode = True
+        self.poll_timer.stop()
+        self.current_user_code = str(code or "").strip()
+        display_code = self.current_user_code or "正在从服务器同步..."
+        self.code_label.setText(f"已绑定的绑定码：{display_code}")
+        self.instruction_label.setText("当前设备已完成来源验证。需要换设备时，请联系管理员释放旧设备后重新生成绑定码。")
+        if self.current_user_code:
+            self.status_label.setText("授权有效。你可以复制已记录的绑定码，或关闭窗口继续使用。")
+        else:
+            self.status_label.setText("授权有效，正在从服务器同步绑定码。同步完成后可复制。")
+        self.copy_button.setEnabled(bool(self.current_user_code))
+        self.start_button.setText("已绑定")
+        self.start_button.setEnabled(False)
+        self.start_button.setToolTip("当前设备已完成来源验证，无需重新生成绑定码。")
+        self.close_button.setText("关闭")
+        self._refresh_binding_status_card()
+
+    def copy_user_code(self):
+        code = str(getattr(self, "current_user_code", "") or "").strip()
+        if not code:
+            self.status_label.setText("尚未生成绑定码，无法复制。")
+            return
+        clipboard = QApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setText(code)
+        if getattr(self, "_bound_mode", False):
+            self.status_label.setText(f"已绑定的绑定码已复制：{code}。")
+        else:
+            self.status_label.setText(f"绑定码已复制：{code}。请在指定 QQ 群发送 /bind {code}。")
+        if hasattr(self.app_window, "show_toast"):
+            self.app_window.show_toast("绑定码已复制", "success")
+
+    def refresh_groups(self):
+        self._stop_group_worker()
+        self.group_worker = AuthPublicGroupsWorker(self.app_window._auth_base_url(), parent=self)
+        self.group_worker.completed.connect(self._handle_groups_result)
+        self.group_worker.finished.connect(self.group_worker.deleteLater)
+        self.group_worker.start()
+
+    def _handle_groups_result(self, ok, data, error):
+        self.group_worker = None
+        if not ok:
+            fallback = [
+                {
+                    "group_id": "483584006",
+                    "group_name": "YHoAutoFish交流群",
+                    "member_count": 0,
+                    "max_member_count": 0,
+                    "join_url": "https://qm.qq.com/q/DR9CCFdYK4",
+                }
+            ]
+            self._render_groups(fallback, f"群列表暂时无法刷新，已显示默认入口：{error}")
+            return
+        groups = data.get("groups") if isinstance(data, dict) else []
+        self._render_groups(groups or [], "服务器暂未公开群入口，请稍后再试。")
+
+    def _render_groups(self, groups, empty_text):
+        while self.group_layout.count():
+            item = self.group_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        if not groups:
+            empty = QLabel(empty_text)
+            empty.setWordWrap(True)
+            empty.setStyleSheet(
+                f"background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.10); border-radius: 12px; color: {APP_COLORS['text_dim']}; padding: 10px; font-size: 12px;"
+            )
+            self.group_layout.addWidget(empty)
+            return
+        for group in groups:
+            group_id = str(group.get("group_id") or "")
+            group_name = str(group.get("group_name") or "YHoAutoFish交流群")
+            member_count = int(group.get("member_count") or 0)
+            max_member_count = int(group.get("max_member_count") or 0)
+            join_url = str(group.get("join_url") or "")
+            row = QFrame()
+            row.setStyleSheet(
+                "QFrame { background-color: rgba(255,255,255,0.045); border: 1px solid rgba(255,255,255,0.10); border-radius: 12px; }"
+            )
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(12, 8, 10, 8)
+            title = QLabel(f"{group_name}（{group_id}）")
+            title.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 12px; font-weight: 800;")
+            row_layout.addWidget(title, 1)
+            count_text = f"{member_count}/{max_member_count}" if max_member_count else (str(member_count) if member_count else "人数未知")
+            count = QLabel(count_text)
+            count.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text_soft']}; font-size: 11px;")
+            row_layout.addWidget(count)
+            join_btn = QPushButton("加入")
+            join_btn.setFocusPolicy(Qt.NoFocus)
+            join_btn.setCursor(Qt.PointingHandCursor)
+            join_btn.setEnabled(bool(join_url))
+            join_btn.setStyleSheet(primary_button_stylesheet() if join_url else secondary_button_stylesheet())
+            if join_url:
+                join_btn.clicked.connect(lambda _checked=False, url=join_url: QDesktopServices.openUrl(QUrl(url)))
+            row_layout.addWidget(join_btn)
+            self.group_layout.addWidget(row)
+
+    def start_activation(self):
+        base_url = self.app_window._auth_base_url()
+        self._stop_worker()
+        self._set_busy(True)
+        self.status_label.setText("正在向授权服务器申请绑定码...")
+        self.worker = AuthActivationWorker(
+            "start",
+            base_url,
+            self.app_window.auth_device_hash,
+            self.app_window.auth_install_id,
+            APP_VERSION,
+            parent=self,
+        )
+        self.worker.completed.connect(self._handle_worker_result)
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.worker.start()
+
+    def poll_activation(self):
+        if getattr(self, "worker", None) is not None and self.worker.isRunning():
+            return
+        activation_id = getattr(self, "activation_id", "") or self.app_window.auth_state.activation_id
+        if not activation_id:
+            return
+        base_url = self.app_window._auth_base_url()
+        self.worker = AuthActivationWorker(
+            "poll",
+            base_url,
+            self.app_window.auth_device_hash,
+            self.app_window.auth_install_id,
+            APP_VERSION,
+            activation_id=activation_id,
+            parent=self,
+        )
+        self.worker.completed.connect(self._handle_worker_result)
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.worker.start()
+
+    def _handle_worker_result(self, action, ok, data, error):
+        self.worker = None
+        self._set_busy(False)
+        if not ok:
+            self.status_label.setText(f"请求失败：{error}")
+            return
+        if action == "start":
+            activation_id = str(data.get("activation_id") or "")
+            user_code = str(data.get("user_code") or "")
+            if not activation_id or not user_code:
+                self.status_label.setText("授权服务器返回异常，缺少绑定码。")
+                return
+            state = AuthState.from_dict(self.app_window.auth_state.to_dict())
+            state.status = "pending"
+            state.activation_id = activation_id
+            state.user_code = user_code
+            state.device_hash = self.app_window.auth_device_hash
+            state.message = "等待 QQ 群绑定"
+            self.app_window._apply_auth_state(state, persist=True)
+            self._show_code(user_code, activation_id)
+            self._refresh_binding_status_card()
+            self.poll_timer.start()
+            return
+
+        status = str(data.get("status") or "")
+        if data.get("authorized"):
+            now = float(data.get("server_time") or time.time())
+            preserved_activation_id = str(getattr(self, "activation_id", "") or self.app_window.auth_state.activation_id or "")
+            preserved_user_code = str(
+                data.get("user_code")
+                or getattr(self, "current_user_code", "")
+                or self.app_window.auth_state.user_code
+                or ""
+            )
+            state = AuthState(
+                status="authorized",
+                access_token=str(data.get("access_token") or ""),
+                license_id=str(data.get("license_id") or ""),
+                device_hash=self.app_window.auth_device_hash,
+                qq_user_id_hash=str(data.get("qq_user_id_hash") or ""),
+                expires_at=float(data.get("expires_at") or 0),
+                last_checked_at=now,
+                activation_id=preserved_activation_id,
+                user_code=preserved_user_code,
+                message="授权成功",
+            )
+            self.app_window._apply_auth_state(state, persist=True)
+            self.app_window.auth_verified_this_session = True
+            self.status_label.setText("授权成功，功能已解锁。")
+            self._refresh_binding_status_card()
+            self.poll_timer.stop()
+            QTimer.singleShot(450, self.accept)
+            return
+        if status == "token_already_issued":
+            self.poll_timer.stop()
+            message = str(data.get("message") or "这个绑定码已经完成过授权。若当前设备仍未解锁，请重新生成绑定码并在群内绑定。")
+            state = AuthState.from_dict(self.app_window.auth_state.to_dict())
+            state.status = "unknown"
+            state.access_token = ""
+            state.activation_id = ""
+            state.user_code = ""
+            state.device_hash = self.app_window.auth_device_hash
+            state.license_id = str(data.get("license_id") or state.license_id or "")
+            state.qq_user_id_hash = str(data.get("qq_user_id_hash") or state.qq_user_id_hash or "")
+            state.message = message
+            self.app_window._apply_auth_state(state, persist=True)
+            self._bound_mode = False
+            self.current_user_code = ""
+            self.activation_id = ""
+            self.code_label.setText("尚未生成绑定码")
+            self.instruction_label.setText("这个绑定码已经领取过授权，不能重复使用。请点击“生成绑定码”，再在指定 QQ 群发送新的 /bind 命令。")
+            self.status_label.setText(message)
+            self.copy_button.setEnabled(False)
+            self.start_button.setText("生成绑定码")
+            self.start_button.setEnabled(True)
+            self.start_button.setToolTip("")
+            self.close_button.setText("稍后验证")
+            self._refresh_binding_status_card()
+            return
+        if status == "pending":
+            self.status_label.setText("仍在等待 QQ 群绑定，请确认命令已发送到指定群。")
+        elif status == "expired":
+            self.poll_timer.stop()
+            self.status_label.setText("绑定码已过期，请重新生成。")
+        else:
+            self.status_label.setText(str(data.get("message") or f"当前状态：{status}"))
 
 
 class PolicyDialog(QDialog):
@@ -1054,10 +1692,12 @@ class SponsorHideDialog(QDialog):
 class QQGroupDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.app_window = parent
+        self.group_worker = None
         self.setModal(True)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.resize(460, 280)
+        self.resize(560, 315)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 14, 14, 14)
@@ -1068,25 +1708,31 @@ class QQGroupDialog(QDialog):
         root.addWidget(shell)
 
         layout = QVBoxLayout(shell)
-        layout.setContentsMargins(24, 22, 24, 22)
-        layout.setSpacing(14)
+        layout.setContentsMargins(22, 20, 22, 18)
+        layout.setSpacing(10)
 
         title = QLabel("QQ群")
-        title.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 25px; font-weight: 900;")
+        title.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 24px; font-weight: 900;")
         layout.addWidget(title)
 
-        note = QLabel("当前可加入的交流群如下。后续增加群组时会显示在这里。")
+        note = QLabel("当前可加入的交流群如下。进群后可发送 /yho help 查看绑定、群规和入口菜单。")
         note.setWordWrap(True)
         note.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 13px;")
         layout.addWidget(note)
 
-        group_btn = QPushButton("加入 QQ 群 483584006")
-        group_btn.setFocusPolicy(Qt.NoFocus)
-        group_btn.setCursor(Qt.PointingHandCursor)
-        group_btn.setStyleSheet(primary_button_stylesheet())
-        group_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://qm.qq.com/q/DR9CCFdYK4")))
-        layout.addWidget(group_btn)
-        layout.addStretch()
+        self.group_scroll = QScrollArea()
+        self.group_scroll.setFrameShape(QFrame.NoFrame)
+        self.group_scroll.setWidgetResizable(True)
+        self.group_scroll.setFixedHeight(150)
+        self.group_scroll.setStyleSheet(scroll_area_stylesheet())
+        self.group_scroll.verticalScrollBar().setStyleSheet(scrollbar_stylesheet(compact=True))
+        self.group_container = QWidget()
+        self.group_layout = QVBoxLayout(self.group_container)
+        self.group_layout.setContentsMargins(0, 0, 0, 0)
+        self.group_layout.setSpacing(8)
+        self.group_scroll.setWidget(self.group_container)
+        layout.addWidget(self.group_scroll)
+        self._render_groups([], "正在从服务器加载群入口...")
 
         close_btn = QPushButton("关闭")
         close_btn.setFocusPolicy(Qt.NoFocus)
@@ -1094,6 +1740,104 @@ class QQGroupDialog(QDialog):
         close_btn.setStyleSheet(secondary_button_stylesheet())
         close_btn.clicked.connect(self.accept)
         layout.addWidget(close_btn, 0, Qt.AlignRight)
+        self.refresh_groups()
+
+    def closeEvent(self, event):
+        self._stop_group_worker()
+        super().closeEvent(event)
+
+    def reject(self):
+        self._stop_group_worker()
+        super().reject()
+
+    def _stop_group_worker(self):
+        worker = self.group_worker
+        if worker is None:
+            return
+        try:
+            if worker.isRunning():
+                worker.requestInterruption()
+                worker.quit()
+                worker.wait(800)
+        except RuntimeError:
+            pass
+        self.group_worker = None
+
+    def refresh_groups(self):
+        self._stop_group_worker()
+        if self.app_window is None or not hasattr(self.app_window, "_auth_base_url"):
+            self._handle_groups_result(False, {}, "授权服务地址不可用")
+            return
+        self.group_worker = AuthPublicGroupsWorker(self.app_window._auth_base_url(), parent=self)
+        self.group_worker.completed.connect(self._handle_groups_result)
+        self.group_worker.finished.connect(self.group_worker.deleteLater)
+        self.group_worker.start()
+
+    def _handle_groups_result(self, ok, data, error):
+        self.group_worker = None
+        if not ok:
+            fallback = [
+                {
+                    "group_id": "483584006",
+                    "group_name": "YHoAutoFish交流群",
+                    "member_count": 0,
+                    "max_member_count": 0,
+                    "join_url": "https://qm.qq.com/q/DR9CCFdYK4",
+                }
+            ]
+            self._render_groups(fallback, f"服务器群入口暂时无法刷新，已显示默认入口：{error}")
+            return
+        groups = data.get("groups") if isinstance(data, dict) else []
+        self._render_groups(groups or [], "服务器暂未公开群入口，请稍后再试。")
+
+    def _render_groups(self, groups, empty_text):
+        while self.group_layout.count():
+            item = self.group_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        if not groups:
+            empty = QLabel(empty_text)
+            empty.setWordWrap(True)
+            empty.setStyleSheet(
+                f"background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.10); border-radius: 14px; color: {APP_COLORS['text_dim']}; padding: 12px; font-size: 12px;"
+            )
+            self.group_layout.addWidget(empty)
+            self.group_layout.addStretch(1)
+            return
+        for group in groups:
+            group_id = str(group.get("group_id") or "")
+            group_name = str(group.get("group_name") or "YHoAutoFish交流群")
+            member_count = int(group.get("member_count") or 0)
+            max_member_count = int(group.get("max_member_count") or 0)
+            join_url = str(group.get("join_url") or "")
+            row = QFrame()
+            row.setFixedHeight(68)
+            row.setStyleSheet(
+                "QFrame { background-color: rgba(255,255,255,0.045); border: 1px solid rgba(255,255,255,0.10); border-radius: 14px; }"
+            )
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(14, 7, 10, 7)
+            text_col = QVBoxLayout()
+            text_col.setSpacing(2)
+            title = QLabel(f"{group_name}（{group_id}）")
+            title.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 13px; font-weight: 900;")
+            text_col.addWidget(title)
+            count_text = f"{member_count}/{max_member_count}" if max_member_count else (str(member_count) if member_count else "人数未知")
+            count = QLabel(count_text)
+            count.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text_soft']}; font-size: 11px;")
+            text_col.addWidget(count)
+            row_layout.addLayout(text_col, 1)
+            join_btn = QPushButton("加入")
+            join_btn.setFocusPolicy(Qt.NoFocus)
+            join_btn.setCursor(Qt.PointingHandCursor)
+            join_btn.setEnabled(bool(join_url))
+            join_btn.setStyleSheet(primary_button_stylesheet() if join_url else secondary_button_stylesheet())
+            if join_url:
+                join_btn.clicked.connect(lambda _checked=False, url=join_url: QDesktopServices.openUrl(QUrl(url)))
+            row_layout.addWidget(join_btn)
+            self.group_layout.addWidget(row)
+        self.group_layout.addStretch(1)
 
 
 class SponsorQrImageCard(QFrame):
@@ -2733,6 +3477,17 @@ class AppWindow(QMainWindow):
         self._settings_saved_snapshot = {}
         self.monthly_card_reset_scheduler = MonthlyCardDailyResetScheduler()
         self._monthly_card_reset_in_progress = False
+        self.auth_install_id = get_or_create_install_id()
+        self.auth_device_hash = build_device_hash(self.auth_install_id)
+        self.auth_state = load_auth_state()
+        if self.auth_state.device_hash and self.auth_state.device_hash != self.auth_device_hash:
+            self.auth_state = AuthState(status="unknown", device_hash=self.auth_device_hash, message="设备指纹已变化")
+            save_auth_state(self.auth_state)
+        elif not self.auth_state.device_hash:
+            self.auth_state.device_hash = self.auth_device_hash
+        self.auth_verified_this_session = False
+        self.auth_check_worker = None
+        self.auth_dialog = None
 
         self.init_ui()
         self._sync_runtime_preferences()
@@ -2747,6 +3502,12 @@ class AppWindow(QMainWindow):
         self.monthly_card_reset_timer.start(15000)
         QTimer.singleShot(1000, self._check_monthly_card_daily_reset)
 
+        self.auth_check_timer = QTimer(self)
+        self.auth_check_timer.setTimerType(Qt.CoarseTimer)
+        self._auth_check_initial_jitter_applied = False
+        self.auth_check_timer.timeout.connect(self._run_scheduled_authorization_check)
+        self._restart_auth_check_timer()
+
         self.init_animation_timer = QTimer(self)
         self.init_animation_timer.timeout.connect(self._tick_init_animation)
         app = QApplication.instance()
@@ -2759,11 +3520,19 @@ class AppWindow(QMainWindow):
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as file:
                 self.config.update(json.load(file))
+            self.config.pop("auth_api_base_url", None)
+            self.config.pop("auth_required", None)
+            self.config.pop("auth_check_interval_minutes", None)
+            self.config.pop("auth_offline_grace_hours", None)
         except Exception as exc:
             print(f"Config load error: {exc}")
 
     def save_config(self):
         try:
+            self.config.pop("auth_api_base_url", None)
+            self.config.pop("auth_required", None)
+            self.config.pop("auth_check_interval_minutes", None)
+            self.config.pop("auth_offline_grace_hours", None)
             with open(CONFIG_FILE, "w", encoding="utf-8") as file:
                 json.dump(self.config, file, ensure_ascii=False, indent=4)
             self._sync_runtime_preferences()
@@ -2775,6 +3544,10 @@ class AppWindow(QMainWindow):
 
     def _save_config_silent(self):
         try:
+            self.config.pop("auth_api_base_url", None)
+            self.config.pop("auth_required", None)
+            self.config.pop("auth_check_interval_minutes", None)
+            self.config.pop("auth_offline_grace_hours", None)
             with open(CONFIG_FILE, "w", encoding="utf-8") as file:
                 json.dump(self.config, file, ensure_ascii=False, indent=4)
             return True
@@ -2825,6 +3598,177 @@ class AppWindow(QMainWindow):
         if self.update_info is not None:
             return
         self.start_update_check(manual=False)
+
+    def _auth_required(self):
+        return auth_config_required(self.config)
+
+    def _auth_base_url(self):
+        return get_auth_base_url()
+
+    def _auth_offline_grace_seconds(self):
+        return auth_offline_grace_seconds(self.config)
+
+    def _auth_decision(self):
+        return decide_cached_authorization(self.config, self.auth_state)
+
+    def _auth_is_allowed(self):
+        return self._auth_decision().allowed
+
+    def _auth_title_status(self):
+        if not self._auth_required():
+            return "验证关闭", "auth_offline", "来源验证未启用"
+        decision = self._auth_decision()
+        state = self.auth_state
+        detail = str(getattr(state, "message", "") or decision.message or "")
+        fixed_policy = "在线复验固定 1 分钟一次；离线宽限固定 5 分钟。"
+        if decision.allowed:
+            if self.auth_verified_this_session:
+                return "授权有效", "auth_ok", f"来源验证已通过。{fixed_policy}"
+            return "待复验", "auth_offline", f"本地授权缓存可用，正在等待在线复验。{fixed_policy}"
+        if str(getattr(state, "status", "") or "") == "pending":
+            return "待绑定", "auth_pending", f"绑定码已生成，请在指定 QQ 群完成 /bind。{fixed_policy}"
+        return "未授权", "auth_bad", f"{detail or '需要完成来源验证'}。{fixed_policy}"
+
+    def _refresh_auth_title_button(self):
+        title_bar = getattr(self, "title_bar", None)
+        if title_bar is not None and hasattr(title_bar, "sync_auth_status"):
+            title_bar.sync_auth_status()
+
+    def _restart_auth_check_timer(self):
+        timer = getattr(self, "auth_check_timer", None)
+        if timer is None:
+            return
+        if not self._auth_required():
+            timer.stop()
+            return
+        interval_ms = auth_check_interval_seconds(self.config) * 1000
+        if not getattr(self, "_auth_check_initial_jitter_applied", False):
+            self._auth_check_initial_jitter_applied = True
+            interval_ms += random.randint(0, 10000)
+        timer.start(interval_ms)
+
+    def _run_scheduled_authorization_check(self):
+        timer = getattr(self, "auth_check_timer", None)
+        interval_ms = auth_check_interval_seconds(self.config) * 1000
+        if timer is not None and timer.interval() != interval_ms:
+            timer.setInterval(interval_ms)
+        self.start_authorization_check(silent=True)
+
+    def _apply_auth_state(self, state, persist=False):
+        self.auth_state = state if isinstance(state, AuthState) else AuthState.from_dict(state)
+        if not self.auth_state.device_hash:
+            self.auth_state.device_hash = self.auth_device_hash
+        if persist:
+            save_auth_state(self.auth_state)
+        self.update_primary_buttons()
+        self._refresh_auth_title_button()
+        dialog = getattr(self, "auth_dialog", None)
+        if dialog is not None and dialog.isVisible() and hasattr(dialog, "refresh_auth_state_view"):
+            dialog.refresh_auth_state_view()
+
+    def _show_authorization_dialog(self):
+        if not self._auth_required():
+            return
+        if self.auth_state.access_token and (not self.auth_verified_this_session or not self._auth_decision().allowed):
+            self.start_authorization_check(silent=True)
+        if self.auth_dialog is not None and self.auth_dialog.isVisible():
+            self.auth_dialog.raise_()
+            self.auth_dialog.activateWindow()
+            return
+        self.auth_dialog = AuthorizationDialog(self)
+        dialog = self.auth_dialog
+        dialog.finished.connect(lambda _result: self.update_primary_buttons())
+        dialog.move(self.geometry().center() - dialog.rect().center())
+        dialog.open()
+
+    def ensure_authorized_for_action(self, action_label):
+        if not self._auth_required():
+            return True
+        decision = self._auth_decision()
+        if decision.allowed and (self.auth_verified_this_session or self._verify_authorization_now_for_action(action_label)):
+            return True
+        self.write_log(f"[来源验证] {action_label} 已拦截：{decision.message}")
+        self.show_toast("请先完成来源验证", "warning")
+        self._show_authorization_dialog()
+        return False
+
+    def _verify_authorization_now_for_action(self, action_label):
+        if not self.auth_state.access_token:
+            return False
+        try:
+            result = AuthClient(self._auth_base_url(), timeout=8).check_entitlement(
+                self.auth_state.access_token,
+                self.auth_device_hash,
+            )
+        except Exception as exc:
+            self.write_log(f"[来源验证] {action_label} 首次在线复验失败：{exc}")
+            return False
+        if not result.get("authorized"):
+            state = AuthState.from_dict(self.auth_state.to_dict())
+            state.status = str(result.get("status") or "denied")
+            state.message = str(result.get("message") or "授权校验未通过")
+            self._apply_auth_state(state, persist=True)
+            return False
+        now = float(result.get("server_time") or time.time())
+        state = AuthState(
+            status="authorized",
+            access_token=self.auth_state.access_token,
+            license_id=str(result.get("license_id") or self.auth_state.license_id or ""),
+            device_hash=self.auth_device_hash,
+            qq_user_id_hash=str(result.get("qq_user_id_hash") or self.auth_state.qq_user_id_hash or ""),
+            expires_at=float(result.get("expires_at") or self.auth_state.expires_at or 0),
+            last_checked_at=now,
+            activation_id=self.auth_state.activation_id,
+            user_code=str(result.get("user_code") or self.auth_state.user_code or ""),
+            message="授权有效",
+        )
+        self.auth_verified_this_session = True
+        self._apply_auth_state(state, persist=True)
+        return True
+
+    def start_authorization_check(self, silent=True):
+        if getattr(self, "_shutting_down", False):
+            return
+        if not self._auth_required():
+            return
+        if self.auth_check_worker is not None and self.auth_check_worker.isRunning():
+            return
+        base_url = self._auth_base_url()
+        if not self.auth_state.access_token:
+            if not silent:
+                self._show_authorization_dialog()
+            return
+        self.auth_check_worker = AuthCheckWorker(base_url, self.auth_state, self.auth_device_hash, self)
+        self.auth_check_worker.completed.connect(self._handle_authorization_check_result)
+        self.auth_check_worker.finished.connect(self.auth_check_worker.deleteLater)
+        self.auth_check_worker.start()
+
+    def _handle_authorization_check_result(self, ok, state, message, network_error):
+        if getattr(self, "_shutting_down", False):
+            return
+        self.auth_check_worker = None
+        if ok:
+            self.auth_verified_this_session = True
+            self._apply_auth_state(state, persist=True)
+            self._refresh_auth_title_button()
+            return
+        if network_error and self.auth_state.is_usable(time.time(), self._auth_offline_grace_seconds()):
+            self.write_log(f"[来源验证] 在线复验失败，暂按离线宽限继续：{message}")
+            self._refresh_auth_title_button()
+            return
+        self._apply_auth_state(state, persist=True)
+        self.auth_verified_this_session = False
+        self.write_log(f"[来源验证] 授权不可用：{message}")
+        if self.sm.is_running:
+            self.sm.stop()
+            self.update_ui_on_stop()
+        self.show_toast("来源验证失败，功能已锁定", "danger")
+        self._show_authorization_dialog()
+
+    def show_authorization_status(self):
+        if self.auth_state.access_token and (not self.auth_verified_this_session or not self.auth_state.user_code):
+            self.start_authorization_check(silent=True)
+        self._show_authorization_dialog()
 
     def _monthly_card_reset_enabled(self):
         snapshot = getattr(self, "_settings_saved_snapshot", {}) or {}
@@ -2902,6 +3846,7 @@ class AppWindow(QMainWindow):
             self.log_textbox.setText("\n".join(self.log_deque))
         self._apply_state_machine_config()
         self._refresh_debug_view_state()
+        self._restart_auth_check_timer()
         if self.floating_window is not None:
             self.floating_window.refresh_state()
             self.floating_window.refresh_log_view(force=True)
@@ -3069,7 +4014,7 @@ class AppWindow(QMainWindow):
             return
         self._shutting_down = True
 
-        for timer_name in ("update_poll_timer", "timer", "monthly_card_reset_timer", "init_animation_timer"):
+        for timer_name in ("update_poll_timer", "timer", "monthly_card_reset_timer", "auth_check_timer", "init_animation_timer"):
             timer = getattr(self, timer_name, None)
             if timer is not None and timer.isActive():
                 timer.stop()
@@ -3082,6 +4027,7 @@ class AppWindow(QMainWindow):
 
         self._stop_worker_thread("update_download_worker", "更新下载线程", wait_ms=1200)
         self._stop_worker_thread("update_check_worker", "更新检查线程", wait_ms=1200)
+        self._stop_worker_thread("auth_check_worker", "授权校验线程", wait_ms=1200)
         self._stop_worker_thread("ocr_init_worker", "识别初始化线程", wait_ms=1800)
 
     def _stop_worker_thread(self, attr_name, label, wait_ms=1200, terminate_wait_ms=800):
@@ -3125,6 +4071,11 @@ class AppWindow(QMainWindow):
         if result != QDialog.Accepted:
             self.close()
             return
+        if self._auth_required():
+            if self._auth_is_allowed():
+                self.start_authorization_check(silent=True)
+            else:
+                self._show_authorization_dialog()
         self._schedule_update_check(initial=True)
 
     def show_about_dialog(self):
@@ -3279,6 +4230,9 @@ class AppWindow(QMainWindow):
     def start_auto_update(self, dialog):
         if getattr(self, "_shutting_down", False):
             return
+        if not self.ensure_authorized_for_action("安装更新"):
+            dialog.set_error("请先完成来源验证，再安装更新。")
+            return
         if self.update_info is None:
             dialog.set_error("当前没有可安装的更新信息。")
             return
@@ -3351,7 +4305,10 @@ class AppWindow(QMainWindow):
 
     def update_primary_buttons(self):
         running = self.sm.is_running
-        if self.modules_initializing:
+        if self._auth_required() and not self._auth_is_allowed():
+            self.btn_start.setText("完成来源验证")
+            self.btn_start.setEnabled(not running and not self.modules_initializing)
+        elif self.modules_initializing:
             self.btn_start.setText(self.init_button_text("初始化模块"))
             self.btn_start.setEnabled(False)
         elif self.modules_ready:
@@ -3363,6 +4320,7 @@ class AppWindow(QMainWindow):
         self.btn_stop.setEnabled(running)
         if self.floating_window is not None:
             self.floating_window.refresh_state()
+        self._refresh_auth_title_button()
 
     def _tick_init_animation(self):
         self.init_animation_step += 1
@@ -3371,6 +4329,8 @@ class AppWindow(QMainWindow):
     def handle_primary_action(self):
         if self.sm.is_running:
             return
+        if not self.ensure_authorized_for_action("启动自动钓鱼"):
+            return
         if not self.modules_ready:
             self.start_module_initialization()
             return
@@ -3378,6 +4338,8 @@ class AppWindow(QMainWindow):
 
     def start_module_initialization(self):
         if getattr(self, "_shutting_down", False):
+            return
+        if not self.ensure_authorized_for_action("初始化识别模块"):
             return
         if self.modules_ready:
             self.update_primary_buttons()
@@ -4012,6 +4974,34 @@ class AppWindow(QMainWindow):
         monthly_card_layout.addStretch()
         self._add_settings_category("月卡复位", monthly_card_page, monthly_card_keys)
 
+        auth_page, auth_layout = self._build_settings_category_page(
+            "来源验证",
+            "服务器授权地址由客户端代码固定，在线复验与离线宽限由程序内置策略控制，用户无法通过设置或配置文件改写。",
+        )
+        self._settings_readonly_block(
+            auth_layout,
+            "在线复验间隔",
+            "程序运行期间固定每 1 分钟向服务器静默复验一次。用户退群、授权吊销或设备超限后，会在下一次复验时锁定功能。",
+            "1min",
+        )
+        self._settings_readonly_block(
+            auth_layout,
+            "离线宽限时间",
+            "服务器临时不可达时，已授权用户最多可在最近一次成功复验后继续使用 5 分钟；超过后必须重新在线验证。",
+            "5min",
+        )
+        self._settings_action_buttons_block(
+            auth_layout,
+            "绑定与群入口",
+            "查看当前来源验证状态，或打开包含机器人提示和官方群入口的来源验证窗口。",
+            (
+                ("查看绑定状态", self.show_authorization_status),
+                ("打开群列表", self._show_authorization_dialog),
+            ),
+        )
+        auth_layout.addStretch()
+        self._add_settings_category("来源验证", auth_page, [])
+
         recognition_page, recognition_layout = self._build_settings_category_page(
             "识别与判定",
             "控制耐力条置信度和结算/失败检测频率。数值越激进，响应越快；数值越保守，误判风险越低。",
@@ -4279,6 +5269,81 @@ class AppWindow(QMainWindow):
         add_shadow(block, blur=20, alpha=85, offset=(0, 8))
         return block
 
+    def _settings_readonly_block(self, parent_layout, title, note, value_text):
+        block = self._settings_panel()
+        layout = QVBoxLayout(block)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(10)
+
+        top = QHBoxLayout()
+        title_label = QLabel(title)
+        title_label.setStyleSheet(
+            f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 16px; font-weight: 800;"
+        )
+        top.addWidget(title_label)
+        top.addStretch()
+        value_label = QLabel(value_text)
+        value_label.setAlignment(Qt.AlignCenter)
+        value_label.setMinimumWidth(74)
+        value_label.setStyleSheet(
+            f"""
+            QLabel {{
+                color: {APP_COLORS['accent_soft']};
+                background-color: rgba(29, 208, 214, 0.10);
+                border: 1px solid rgba(29, 208, 214, 0.22);
+                border-radius: 14px;
+                padding: 6px 10px;
+                font-size: 18px;
+                font-weight: 900;
+            }}
+            """
+        )
+        top.addWidget(value_label)
+        layout.addLayout(top)
+
+        note_label = QLabel(note)
+        note_label.setWordWrap(True)
+        note_label.setStyleSheet(
+            f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 12px;"
+        )
+        layout.addWidget(note_label)
+        parent_layout.addWidget(block)
+        return block
+
+    def _settings_action_buttons_block(self, parent_layout, title, note, actions):
+        block = self._settings_panel()
+        layout = QVBoxLayout(block)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(10)
+
+        title_label = QLabel(title)
+        title_label.setStyleSheet(
+            f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 16px; font-weight: 800;"
+        )
+        layout.addWidget(title_label)
+
+        note_label = QLabel(note)
+        note_label.setWordWrap(True)
+        note_label.setStyleSheet(
+            f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 12px;"
+        )
+        layout.addWidget(note_label)
+
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        for index, (text, callback) in enumerate(actions or ()):
+            button = QPushButton(str(text))
+            button.setFocusPolicy(Qt.NoFocus)
+            button.setCursor(Qt.PointingHandCursor)
+            button.setStyleSheet(primary_button_stylesheet() if index == 0 else secondary_button_stylesheet())
+            button.clicked.connect(callback)
+            row.addWidget(button)
+        row.addStretch()
+        layout.addLayout(row)
+
+        parent_layout.addWidget(block)
+        return block
+
     def _settings_block(
         self,
         parent_layout,
@@ -4434,6 +5499,51 @@ class AppWindow(QMainWindow):
         self._setting_widgets[key] = {"type": "toggle", "widget": button}
         return button
 
+    def _settings_text_block(self, parent_layout, title, note, value, key, placeholder=""):
+        block = self._settings_panel()
+        layout = QVBoxLayout(block)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(10)
+
+        title_label = QLabel(title)
+        title_label.setStyleSheet(
+            f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 16px; font-weight: 800;"
+        )
+        layout.addWidget(title_label)
+
+        note_label = QLabel(note)
+        note_label.setWordWrap(True)
+        note_label.setStyleSheet(
+            f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 12px;"
+        )
+        layout.addWidget(note_label)
+
+        line_edit = QLineEdit(str(value or ""))
+        line_edit.setPlaceholderText(placeholder)
+        line_edit.setMinimumHeight(42)
+        line_edit.setStyleSheet(
+            f"""
+            QLineEdit {{
+                background-color: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(111, 145, 182, 0.22);
+                border-radius: 14px;
+                color: {APP_COLORS['text']};
+                padding: 0 14px;
+                font-size: 13px;
+            }}
+            QLineEdit:focus {{
+                border: 1px solid rgba(29, 208, 214, 0.62);
+                background-color: rgba(255, 255, 255, 0.07);
+            }}
+            """
+        )
+        line_edit.textChanged.connect(lambda text, cfg_key=key: self._update_text_value(cfg_key, text))
+        layout.addWidget(line_edit)
+
+        parent_layout.addWidget(block)
+        self._setting_widgets[key] = {"type": "text", "widget": line_edit}
+        return line_edit
+
     def _sponsor_visibility_settings_block(self, parent_layout, title, note, visible, key):
         block = self._settings_panel()
         layout = QHBoxLayout(block)
@@ -4507,6 +5617,10 @@ class AppWindow(QMainWindow):
     def _update_toggle_value(self, button, key, checked):
         self.config[key] = bool(checked)
         button.setText("已开启" if checked else "已关闭")
+        self._mark_settings_dirty()
+
+    def _update_text_value(self, key, text):
+        self.config[key] = str(text or "").strip()
         self._mark_settings_dirty()
 
     def _update_sponsor_visibility_value(self, button, key, checked):
@@ -4626,6 +5740,14 @@ class AppWindow(QMainWindow):
                     button.setChecked(target)
                 else:
                     self.config[key] = not target
+            elif widget_info["type"] == "text":
+                line_edit = widget_info["widget"]
+                target = str(default_value or "")
+                if line_edit.text() != target:
+                    changed = True
+                    line_edit.setText(target)
+                else:
+                    self.config[key] = target
         if changed:
             self._mark_settings_dirty()
             self.show_toast("已恢复当前分类推荐值，请保存应用", "info")
@@ -4644,6 +5766,7 @@ class AppWindow(QMainWindow):
             self._set_settings_dirty(False)
             self.show_toast("高级设置已保存并应用", "success")
             self._check_monthly_card_daily_reset()
+            self.start_authorization_check(silent=True)
         else:
             self.show_toast("设置保存失败，请查看运行日志", "danger")
 
@@ -4823,6 +5946,8 @@ class AppWindow(QMainWindow):
     def start_bot(self):
         if self.sm.is_running:
             return
+        if not self.ensure_authorized_for_action("启动自动钓鱼"):
+            return
         if not self.modules_ready:
             self.start_module_initialization()
             return
@@ -4858,3 +5983,4 @@ class AppWindow(QMainWindow):
         self.page_record.refresh_data()
         if self.page_encyclopedia is not None:
             self.page_encyclopedia.refresh_data()
+

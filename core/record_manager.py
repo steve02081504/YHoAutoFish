@@ -12,6 +12,8 @@ from difflib import SequenceMatcher
 from core.paths import ensure_writable_file, resource_path
 
 _RECORD_FILE_LOCK = threading.RLock()
+ENCYCLOPEDIA_RESOURCE_DIR = "异环鱼类图鉴资源"
+ENCYCLOPEDIA_RESOURCE_DIR_ASCII = "fish_encyclopedia"
 OCR_CONFUSABLE_CHARS = str.maketrans({
     "賽": "紫",
     "赛": "紫",
@@ -43,7 +45,7 @@ class RecordManager:
 
     def __init__(self, record_file=None, encyclopedia_dir=None):
         self.record_file = record_file or ensure_writable_file("records.json")
-        self.encyclopedia_dir = encyclopedia_dir or resource_path("异环鱼类图鉴资源")
+        self.encyclopedia_dir = encyclopedia_dir or self._default_encyclopedia_dir()
         self._query_cache = {}
         self._cache_version = 0
         self.records = {
@@ -60,6 +62,13 @@ class RecordManager:
             self._sync_encyclopedia_images()
             if self._migration_needed:
                 self.save_records()
+
+    @staticmethod
+    def _default_encyclopedia_dir():
+        primary = resource_path(ENCYCLOPEDIA_RESOURCE_DIR)
+        if os.path.exists(primary):
+            return primary
+        return resource_path(ENCYCLOPEDIA_RESOURCE_DIR_ASCII)
 
     def _touch_cache(self):
         self._cache_version += 1

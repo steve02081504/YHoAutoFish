@@ -55,6 +55,7 @@ datas += existing_data("assets", "assets")
 datas += existing_data("异环鱼类图鉴资源", "异环鱼类图鉴资源")
 datas += existing_data("ocr_models", "ocr_models")
 datas += existing_data("sponsor_qr", "sponsor_qr")
+datas += existing_data("certs", "certs")
 datas += existing_data("logo.jpg", ".")
 datas += existing_data("build_assets/logo.ico", ".")
 datas += existing_data("config.json", ".")
@@ -64,6 +65,10 @@ hiddenimports = [
     "cnocr",
     "cnstd",
     "core.admin",
+    "core.auth_client",
+    "core.auth_device",
+    "core.auth_policy",
+    "core.auth_store",
     "core.controller",
     "core.dpi",
     "core.monthly_card_reset",
@@ -93,6 +98,7 @@ hiddenimports = [
     "pydirectinput",
     "rapidocr",
     "shiboken6",
+    "win32crypt",
     "win32api",
     "win32gui",
     "win32process",
