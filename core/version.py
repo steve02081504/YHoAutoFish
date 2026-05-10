@@ -3,7 +3,3 @@ APP_DISPLAY_NAME = "异环自动钓鱼"
 APP_VERSION = "1.3.0"
 APP_VERSION_FILE = "1.3.0.0"
 APP_VERSION_TUPLE = (1, 3, 0, 0)
-APP_AUTHOR = "FADEDTUMI"
-APP_REPOSITORY_URL = "https://github.com/FADEDTUMI/YHoAutoFish"
-APP_GITEE_REPOSITORY_URL = "https://gitee.com/fadedtumi/YHoAutoFish"
-APP_RELEASE_ARCHIVE = f"{APP_NAME}-v{APP_VERSION}-windows.zip"

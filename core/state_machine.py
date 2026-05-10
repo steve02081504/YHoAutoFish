@@ -1504,7 +1504,7 @@ class StateMachine:
             parts.append(
                 "缺少本地 OCR 模型文件："
                 + "；".join(str(path) for path in missing_models)
-                + "。请使用包含 ocr_models 目录的完整发布包，或重新执行 build_release.ps1 打包。"
+                + "。请使用包含 ocr_models 目录的完整依赖目录。"
             )
 
         parts.append(
