@@ -1,3 +1,5 @@
 /.venv
 __pycache__
 /records.json
+config.json
+/screenshot
