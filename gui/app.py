@@ -1254,6 +1254,7 @@ class AppWindow(QMainWindow):
         self._main_capture_window_state = None
         self.modules_ready = False
         self.modules_initializing = False
+        self._auto_cast_watch_enabled = False
         self.init_animation_step = 0
         self.ocr_init_worker = None
         self._shutting_down = False
@@ -1281,6 +1282,11 @@ class AppWindow(QMainWindow):
 
         self.init_animation_timer = QTimer(self)
         self.init_animation_timer.timeout.connect(self._tick_init_animation)
+
+        self.auto_cast_watch_timer = QTimer(self)
+        self.auto_cast_watch_timer.setInterval(5000)
+        self.auto_cast_watch_timer.timeout.connect(self._poll_auto_cast_start)
+
         QTimer.singleShot(0, self.start_module_initialization)
         app = QApplication.instance()
         if app is not None:
@@ -1555,10 +1561,11 @@ class AppWindow(QMainWindow):
             return
         self._shutting_down = True
 
-        for timer_name in ("timer", "monthly_card_reset_timer", "init_animation_timer"):
+        for timer_name in ("timer", "monthly_card_reset_timer", "init_animation_timer", "auto_cast_watch_timer"):
             timer = getattr(self, timer_name, None)
             if timer is not None and timer.isActive():
                 timer.stop()
+        self._auto_cast_watch_enabled = False
 
         if self.sm.is_running:
             self.sm.stop()
@@ -1651,6 +1658,31 @@ class AppWindow(QMainWindow):
             "success" if success else "danger",
         )
         self.ocr_init_worker = None
+        if success:
+            self._start_auto_cast_watch()
+
+    def _start_auto_cast_watch(self):
+        self._auto_cast_watch_enabled = True
+        timer = getattr(self, "auto_cast_watch_timer", None)
+        if timer is not None and not timer.isActive():
+            timer.start()
+
+    def _disable_auto_cast_watch(self):
+        self._auto_cast_watch_enabled = False
+        timer = getattr(self, "auto_cast_watch_timer", None)
+        if timer is not None:
+            timer.stop()
+
+    def _poll_auto_cast_start(self):
+        if not self._auto_cast_watch_enabled or self._shutting_down:
+            return
+        if not self.modules_ready or self.modules_initializing or self.sm.is_running:
+            return
+        if not self.sm.probe_ready_to_cast():
+            return
+        self.write_log("[系统] 检测到钓鱼按钮，自动启动钓鱼。")
+        self.show_toast("检测到钓鱼界面，自动启动", "success")
+        self.start_bot()
 
     def toggle_floating_window(self):
         if self.floating_window is None:
@@ -2973,6 +3005,7 @@ class AppWindow(QMainWindow):
         self.sm.update_config("user_takeover_exclude_rects", rects)
 
     def handle_user_takeover_pause(self, reason=""):
+        self._disable_auto_cast_watch()
         self.update_ui_on_stop()
         self.status_chip.set_status("已暂停", "stopped")
         self.write_log(">>> 检测到用户接管游戏，自动钓鱼已暂停。")
@@ -3021,6 +3054,7 @@ class AppWindow(QMainWindow):
         if not self.sm.is_running:
             self.show_toast("当前未在运行", "warning")
             return
+        self._disable_auto_cast_watch()
         self.sm.stop()
         self.write_log(">>> 已发送停止指令。")
         self.update_ui_on_stop()

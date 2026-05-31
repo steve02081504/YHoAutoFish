@@ -353,6 +353,33 @@ class StateMachine:
         self.ocr_module.load_fish_matcher_refs()
         return name_ocr is not None and weight_ocr is not None and general_ocr is not None
 
+    def probe_ready_to_cast(self):
+        """未运行时的轻量抛竿界面探测，供 GUI 自动启动轮询使用。"""
+        if self.is_running:
+            return False
+        if not self.wm.find_window():
+            return False
+        rect = self.wm.get_client_rect()
+        if not rect:
+            return False
+
+        previous_sc = self.sc
+        probe_sc = ScreenCapture()
+        self.sc = probe_sc
+        try:
+            ready_info = self.cast_det.detect_ready_to_cast(rect, allow_heavy=True)
+            if not ready_info or ready_info.get("blocking_result"):
+                return False
+            return bool(ready_info.get("location"))
+        except Exception:
+            return False
+        finally:
+            try:
+                probe_sc.close()
+            except Exception:
+                pass
+            self.sc = previous_sc
+
     def _run_loop(self):
         # 确保在当前线程中实例化 ScreenCapture
         self.sc = ScreenCapture()
