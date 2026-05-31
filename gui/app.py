@@ -1256,6 +1256,7 @@ class AppWindow(QMainWindow):
         self.modules_ready = False
         self.modules_initializing = False
         self._auto_cast_watch_enabled = False
+        self._game_window_watch_applied = False
         self.init_animation_step = 0
         self.ocr_init_worker = None
         self._shutting_down = False
@@ -1287,6 +1288,11 @@ class AppWindow(QMainWindow):
         self.auto_cast_watch_timer = QTimer(self)
         self.auto_cast_watch_timer.setInterval(5000)
         self.auto_cast_watch_timer.timeout.connect(self._poll_auto_cast_start)
+
+        self.game_window_watch_timer = QTimer(self)
+        self.game_window_watch_timer.setInterval(5000)
+        self.game_window_watch_timer.timeout.connect(self._poll_game_window_watch)
+        self.game_window_watch_timer.start()
 
         QTimer.singleShot(0, self.start_module_initialization)
         app = QApplication.instance()
@@ -1563,7 +1569,13 @@ class AppWindow(QMainWindow):
             return
         self._shutting_down = True
 
-        for timer_name in ("timer", "monthly_card_reset_timer", "init_animation_timer", "auto_cast_watch_timer"):
+        for timer_name in (
+            "timer",
+            "monthly_card_reset_timer",
+            "init_animation_timer",
+            "auto_cast_watch_timer",
+            "game_window_watch_timer",
+        ):
             timer = getattr(self, timer_name, None)
             if timer is not None and timer.isActive():
                 timer.stop()
@@ -1685,6 +1697,29 @@ class AppWindow(QMainWindow):
         self.write_log("[系统] 检测到钓鱼按钮，自动启动钓鱼。")
         self.show_toast("检测到钓鱼界面，自动启动", "success")
         self.start_bot()
+
+    def _poll_game_window_watch(self):
+        if self._game_window_watch_applied or self._shutting_down or getattr(self, "_main_hidden_for_capture", False):
+            return
+        if not self.sm.wm.find_window() or not self.sm.wm.is_window_visible_and_restored():
+            return
+
+        if self.isVisible() and not self.isMinimized():
+            self.showMinimized()
+
+        if self.floating_window is None:
+            self.floating_window = FloatingControlWindow(self)
+        if not self.floating_window.user_visible_requested:
+            self.floating_window.refresh_state()
+            self.floating_window.set_user_visible_requested(True)
+        elif not self.floating_window.isVisible():
+            self.floating_window.sync_game_visibility()
+
+        self._game_window_watch_applied = True
+        timer = getattr(self, "game_window_watch_timer", None)
+        if timer is not None:
+            timer.stop()
+        self.write_log("[系统] 检测到游戏窗口，已最小化主窗口并开启悬浮窗。")
 
     def toggle_floating_window(self):
         if self.floating_window is None:
