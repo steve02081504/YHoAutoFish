@@ -444,19 +444,13 @@ class RecognitionInitWorker(QThread):
         self.state_machine = state_machine
 
     def run(self):
-        try:
-            ok = self.state_machine.prepare_recognition_modules()
-            if self.isInterruptionRequested():
-                return
-            if ok:
-                self.completed.emit(True, "识别模块初始化完成，可以开始钓鱼。")
-            else:
-                self.completed.emit(False, self.state_machine.get_ocr_init_failure_message())
-        except Exception as exc:
-            if self.isInterruptionRequested():
-                return
-            detail = self.state_machine.get_ocr_init_failure_message()
-            self.completed.emit(False, f"{detail} 原始异常: {exc}")
+        success = self.state_machine.prepare_recognition_modules()
+        if self.isInterruptionRequested():
+            return
+        if success:
+            self.completed.emit(True, "识别模块初始化完成，可以开始钓鱼。")
+        else:
+            self.completed.emit(False, self.state_machine.get_ocr_init_failure_message())
 
 
 class TakeoverPauseDialog(QDialog):
@@ -922,8 +916,6 @@ class FloatingControlWindow(QFrame):
 
         self.floating_log_view.setMaximumBlockCount(int(self.app_window.config.get("log_line_limit", 320)))
         text = "\n".join(self.app_window.log_deque)
-        if not text:
-            text = "--- 异环自动钓鱼初始化完成 ---\n请确保游戏窗口处于可操作状态。"
         if force or text != self._last_log_text:
             self.floating_log_view.setPlainText(text)
             scrollbar = self.floating_log_view.verticalScrollBar()
@@ -1020,8 +1012,6 @@ class FloatingControlWindow(QFrame):
 
     def refresh_state(self):
         running = self.app_window.sm.is_running
-        modules_ready = self.app_window.modules_ready
-        modules_initializing = self.app_window.modules_initializing
         status_text = "运行中" if running else "待机中"
         status_color = APP_COLORS["accent_soft"] if running else APP_COLORS["text_dim"]
         dot_color = APP_COLORS["success"] if running else APP_COLORS["warning"]
@@ -1038,13 +1028,8 @@ class FloatingControlWindow(QFrame):
             }}
             """
         )
-        if modules_initializing:
-            self.start_btn.setText(self.app_window.init_button_text("▶ 初始化"))
-        elif modules_ready:
-            self.start_btn.setText("▶ 开始")
-        else:
-            self.start_btn.setText("▶ 初始化")
-        self.start_btn.setEnabled(not running and not modules_initializing)
+        self.start_btn.setText(self.app_window.primary_start_button_label(floating=True))
+        self.start_btn.setEnabled(not running and not self.app_window.modules_initializing)
         self.stop_btn.setEnabled(running)
         self.start_btn.setStyleSheet(primary_button_stylesheet())
         self.stop_btn.setStyleSheet(
@@ -1296,6 +1281,7 @@ class AppWindow(QMainWindow):
 
         self.init_animation_timer = QTimer(self)
         self.init_animation_timer.timeout.connect(self._tick_init_animation)
+        QTimer.singleShot(0, self.start_module_initialization)
         app = QApplication.instance()
         if app is not None:
             app.aboutToQuit.connect(self.shutdown_background_tasks)
@@ -1603,21 +1589,25 @@ class AppWindow(QMainWindow):
         if hasattr(self, "toast"):
             self.toast.show_message(text, tone)
 
-    def init_button_text(self, prefix="初始化模块"):
+    def primary_start_button_label(self, floating=False):
+        prefix = "▶ " if floating else ""
         dots = "." * ((self.init_animation_step % 3) + 1)
-        return f"{prefix}{dots}"
+        if self.modules_initializing:
+            return f"{prefix}初始化中{dots}"
+        if self.modules_ready:
+            return f"{prefix}开始" if floating else "开始钓鱼"
+        return f"{prefix}重试" if floating else "重试初始化"
 
     def update_primary_buttons(self):
         running = self.sm.is_running
+        self.btn_start.setText(self.primary_start_button_label())
+        self.btn_start.setEnabled(not running and not self.modules_initializing)
         if self.modules_initializing:
-            self.btn_start.setText(self.init_button_text("初始化模块"))
-            self.btn_start.setEnabled(False)
-        elif self.modules_ready:
-            self.btn_start.setText("开始钓鱼")
-            self.btn_start.setEnabled(not running)
-        else:
-            self.btn_start.setText("初始化模块")
-            self.btn_start.setEnabled(not running)
+            self.status_chip.set_status("初始化中", "idle")
+        elif self.modules_ready and not running:
+            self.status_chip.set_status("待机中", "idle")
+        elif not self.modules_ready:
+            self.status_chip.set_status("初始化失败", "stopped")
         self.btn_stop.setEnabled(running)
         if self.floating_window is not None:
             self.floating_window.refresh_state()
@@ -1627,20 +1617,14 @@ class AppWindow(QMainWindow):
         self.update_primary_buttons()
 
     def handle_primary_action(self):
-        if self.sm.is_running:
-            return
-        if not self.modules_ready:
-            self.start_module_initialization()
-            return
-        self.start_bot()
-
-    def start_module_initialization(self):
-        if getattr(self, "_shutting_down", False):
+        if self.sm.is_running or self.modules_initializing:
             return
         if self.modules_ready:
-            self.update_primary_buttons()
-            return
-        if self.modules_initializing:
+            return self.start_bot()
+        self.start_module_initialization()
+
+    def start_module_initialization(self):
+        if self._shutting_down or self.modules_initializing:
             return
         self.modules_initializing = True
         self.init_animation_step = 0
@@ -1654,16 +1638,18 @@ class AppWindow(QMainWindow):
         self.ocr_init_worker.finished.connect(self.ocr_init_worker.deleteLater)
         self.ocr_init_worker.start()
 
-    def _handle_module_init_result(self, ok, message):
-        if getattr(self, "_shutting_down", False):
+    def _handle_module_init_result(self, success, message):
+        if self._shutting_down:
             return
         self.init_animation_timer.stop()
         self.modules_initializing = False
-        self.modules_ready = bool(ok)
+        self.modules_ready = success
         self.update_primary_buttons()
         self.write_log(f"[系统] {message}")
-        toast_message = message if ok else "识别模块初始化失败，详情已写入运行日志。"
-        self.show_toast(toast_message, "success" if ok else "danger")
+        self.show_toast(
+            message if success else "识别模块初始化失败，详情已写入运行日志。",
+            "success" if success else "danger",
+        )
         self.ocr_init_worker = None
 
     def toggle_floating_window(self):
@@ -1836,7 +1822,6 @@ class AppWindow(QMainWindow):
         self.log_textbox = QTextEdit()
         self.log_textbox.setReadOnly(True)
         self.log_textbox.setStyleSheet(text_edit_stylesheet())
-        self.log_textbox.append("--- 异环自动钓鱼初始化完成 ---\n请确保游戏窗口处于可操作状态。")
         content_row.addWidget(self.log_textbox, 5)
 
         debug_panel = QFrame()
@@ -3016,9 +3001,6 @@ class AppWindow(QMainWindow):
 
     def start_bot(self):
         if self.sm.is_running:
-            return
-        if not self.modules_ready:
-            self.start_module_initialization()
             return
 
         if not self._confirm_game_resolution_before_start():
