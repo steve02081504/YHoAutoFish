@@ -197,8 +197,65 @@ class FishingBarDetector:
         if current_direction == 0:
             return False
 
-        self._sm._apply_fishing_control_direction(current_direction)
+        self._sm.fish_ctrl.apply_direction(current_direction)
         return True
+
+    # ------------------------------------------------------------------
+    # 检测失败脱困：先回中心，超时后左右扫
+    # ------------------------------------------------------------------
+    def _recovery_bar_center_client_x(self, rect, roi):
+        if not rect or not roi:
+            return None
+        roi_width = max(1, int(rect[2] * roi[2]))
+        return int(round(rect[2] * roi[0] + roi_width * 0.5))
+
+    def _recovery_toward_center_direction(self, rect, roi):
+        center_x = self._recovery_bar_center_client_x(rect, roi)
+        last_cursor_x = getattr(self._sm.round, "last_valid_cursor_x", None)
+        if center_x is None or last_cursor_x is None:
+            last_error = float(getattr(self._sm.round, "last_control_error", 0) or 0)
+            if abs(last_error) >= 1.0:
+                return 1 if last_error > 0 else -1
+            return int(getattr(self._sm.round, "detection_recovery_sweep_direction", 1) or 1)
+
+        roi_width = max(1, int(rect[2] * roi[2]))
+        center_margin = max(8, int(roi_width * 0.05))
+        if last_cursor_x < center_x - center_margin:
+            return 1
+        if last_cursor_x > center_x + center_margin:
+            return -1
+        return 0
+
+    def _recovery_sweep_direction(self, now, interval):
+        round_state = self._sm.round
+        last_switch = float(getattr(round_state, "detection_recovery_sweep_last_switch", 0) or 0)
+        direction = int(getattr(round_state, "detection_recovery_sweep_direction", 1) or 1)
+        if direction not in (-1, 1):
+            direction = 1
+        if last_switch <= 0:
+            round_state.detection_recovery_sweep_last_switch = now
+            round_state.detection_recovery_sweep_direction = direction
+            return direction
+        if now - last_switch >= interval:
+            direction = -direction
+            round_state.detection_recovery_sweep_direction = direction
+            round_state.detection_recovery_sweep_last_switch = now
+        return direction
+
+    def apply_detection_recovery(self, rect, roi, missing_elapsed):
+        """识别断帧时先朝条中心移动，超时后再左右交替脱困。"""
+        sweep_timeout = max(1.0, min(float(self._sm.config.get("cursor_recovery_sweep_timeout", 3)), 10.0))
+        sweep_interval = 0.45
+        now = time.time()
+        if missing_elapsed < sweep_timeout:
+            direction = self._recovery_toward_center_direction(rect, roi)
+        else:
+            direction = self._recovery_sweep_direction(now, sweep_interval)
+        self._sm.fish_ctrl.apply_direction(direction)
+        return True
+
+    def reset_detection_recovery_state(self):
+        self._sm.round.detection_recovery_sweep_last_switch = 0
 
     # ------------------------------------------------------------------
     # 丢失后判定
@@ -244,4 +301,5 @@ class FishingBarDetector:
         self._sm.round.seen_fishing_bar = False
         self._sm.round.last_target_time = 0
         self._sm.round.target_velocity = 0
+        self._sm.round.detection_recovery_sweep_last_switch = 0
         self._sm.current_state = self._sm.STATE_RESULT

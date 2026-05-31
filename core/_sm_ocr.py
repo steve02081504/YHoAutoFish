@@ -22,6 +22,12 @@ OCR_REQUIRED_MODELS = (
     ),
 )
 
+SETTLEMENT_FISH_IMAGE_ROIS = (
+    (0.33, 0.24, 0.34, 0.34),
+    (0.30, 0.22, 0.40, 0.38),
+    (0.36, 0.26, 0.28, 0.30),
+)
+
 
 class SettlementOCR:
     """OCR 结算识别模块，从 StateMachine 中提取。"""
@@ -583,6 +589,9 @@ class SettlementOCR:
     # 图像兜底匹配
     # ------------------------------------------------------------------
 
+    def invalidate_fish_matcher_refs(self):
+        self._fish_matcher_refs = None
+
     def load_fish_matcher_refs(self):
         if self._fish_matcher_refs is not None:
             return self._fish_matcher_refs
@@ -807,6 +816,48 @@ class SettlementOCR:
                 break
         return "、".join(unique)
 
+    @staticmethod
+    def _write_bgr_image(path, image):
+        ext = os.path.splitext(path)[1] or ".png"
+        ok, encoded = cv2.imencode(ext, image)
+        if not ok:
+            return False
+        encoded.tofile(path)
+        return True
+
+    def capture_settlement_fish_image(self, rect):
+        if self._sm.sc is None:
+            return None
+
+        best_image = None
+        best_size = 0
+        for roi in SETTLEMENT_FISH_IMAGE_ROIS:
+            image = self._sm.sc.capture_relative(rect, *roi)
+            if image is None or image.size == 0:
+                continue
+            size = int(image.shape[0]) * int(image.shape[1])
+            if size > best_size:
+                best_size = size
+                best_image = image
+        return best_image
+
+    def try_auto_save_encyclopedia_image(self, rect, fish_name):
+        dest_path = self._sm.record_mgr.prepare_auto_encyclopedia_image_path(fish_name)
+        if not dest_path:
+            return ""
+
+        image = self.capture_settlement_fish_image(rect)
+        if image is None:
+            self._sm._log(f"[图鉴] 未能截取 {fish_name} 结算图标，跳过自动生成图鉴资源。")
+            return ""
+
+        if not self._write_bgr_image(dest_path, image):
+            self._sm._log(f"[图鉴] 保存 {fish_name} 图鉴资源失败: {dest_path}")
+            return ""
+
+        self._sm._log(f"[图鉴] 已自动生成图鉴资源: {dest_path}")
+        return dest_path
+
     def save_unknown_settlement_debug(self, rect, name_rois):
         if self._sm.sc is None:
             return
@@ -847,11 +898,7 @@ class SettlementOCR:
             (0.28, 0.18, 0.44, 0.11),
             (0.24, 0.10, 0.52, 0.20),
         ]
-        fish_image_rois = [
-            (0.33, 0.24, 0.34, 0.34),
-            (0.30, 0.22, 0.40, 0.38),
-            (0.36, 0.26, 0.28, 0.30),
-        ]
+        fish_image_rois = list(SETTLEMENT_FISH_IMAGE_ROIS)
         weight_rois = [
             (0.33, 0.62, 0.34, 0.14),
             (0.30, 0.60, 0.40, 0.16),

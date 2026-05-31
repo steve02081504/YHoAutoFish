@@ -54,6 +54,8 @@ class RoundState:
         self.last_control_error = 0
         self.last_control_target_w = None
         self.round_had_fishing_bar = False
+        self.detection_recovery_sweep_direction = 1
+        self.detection_recovery_sweep_last_switch = 0
 
         # ── 结果判定阶段 ──
         self.result_empty_recorded = False
@@ -167,6 +169,8 @@ class RoundState:
         self.last_control_error = 0
         self.last_control_target_w = None
         self.round_had_fishing_bar = False
+        self.detection_recovery_sweep_direction = 1
+        self.detection_recovery_sweep_last_switch = 0
 
     def _reset_result(self):
         self.result_empty_recorded = False

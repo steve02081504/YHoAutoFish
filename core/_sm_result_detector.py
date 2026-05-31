@@ -635,6 +635,9 @@ class ResultDetector:
                 fish_name, weight_g = settlement_info
             if getattr(self._sm, "_stop_requested", False):
                 return
+            if self._sm.ocr_module.try_auto_save_encyclopedia_image(rect, fish_name):
+                self._sm.record_mgr._sync_encyclopedia_images()
+                self._sm.ocr_module.invalidate_fish_matcher_refs()
             self._sm.record_mgr.add_catch(fish_name, weight_g)
             self._sm.fish_count += 1
             self._sm._record_auto_sell_catch()

@@ -94,6 +94,7 @@ class StateMachine:
             "cast_animation_delay": 2,
             "settlement_close_delay": 1,
             "bar_missing_timeout": 3,
+            "cursor_recovery_sweep_timeout": 3,
             "pre_control_timeout": 14,
             "hook_wait_timeout": 90,
             "recovery_timeout": 8,
@@ -641,6 +642,15 @@ class StateMachine:
 
         # 判断是否结束 (无论是成功还是鱼儿溜走，耐力条都会消失)
         if target_x is None or cursor_x is None:
+            active_fishing = (
+                getattr(self.round, 'fishing_control_started', False)
+                and getattr(self.round, 'confirmed_fishing_bar', False)
+            )
+            if active_fishing and getattr(self.round, 'missing_start_time', 0) == 0:
+                self.round.missing_start_time = time.time()
+                self.round.result_quick_check_last = 0
+                self.round.result_full_check_last = self.round.missing_start_time
+
             if getattr(self.round, "last_bar_capture_failed", False):
                 if getattr(self.round, "capture_missing_start_time", 0) == 0:
                     self.round.capture_missing_start_time = time.time()
@@ -656,12 +666,12 @@ class StateMachine:
             if self.bar_detector.hold_recent_fishing_control_on_gap():
                 return
 
-            # 安全保护：如果丢失目标，立刻释放所有按键，防止游标因为惯性飞出界
-            self.ctrl.release_all()
-            self.round.fish_control_direction = 0
-            self.round.fish_control_min_hold_until = 0
-            
             if not getattr(self.round, 'fishing_control_started', False):
+                self.ctrl.release_all()
+                self.round.fish_control_direction = 0
+                self.round.fish_control_min_hold_until = 0
+                self.bar_detector.reset_detection_recovery_state()
+                
                 last_seen_time = getattr(self.round, 'last_bar_seen_time', 0)
                 if last_seen_time and time.time() - last_seen_time > 0.55:
                     self.round.bar_seen_streak = 0
@@ -678,6 +688,11 @@ class StateMachine:
                 return
 
             if not getattr(self.round, 'confirmed_fishing_bar', False):
+                self.ctrl.release_all()
+                self.round.fish_control_direction = 0
+                self.round.fish_control_min_hold_until = 0
+                self.bar_detector.reset_detection_recovery_state()
+
                 last_seen_time = getattr(self.round, 'last_bar_seen_time', 0)
                 if last_seen_time and time.time() - last_seen_time > 0.55:
                     self.round.bar_seen_streak = 0
@@ -692,12 +707,8 @@ class StateMachine:
                 return
 
             # 引入容错：偶尔一帧没识别到不算结束，连续丢失超过用户设定才算结束
-            if getattr(self.round, 'missing_start_time', 0) == 0:
-                self.round.missing_start_time = time.time()
-                self.round.result_quick_check_last = 0
-                self.round.result_full_check_last = self.round.missing_start_time
-
             missing_elapsed = time.time() - self.round.missing_start_time
+            self.bar_detector.apply_detection_recovery(rect, roi, missing_elapsed)
             if missing_elapsed >= 0.12 and self.result_det.check_result_signals_after_bar_missing(rect, missing_elapsed):
                 return
             if self.bar_detector.should_enter_result_after_confirmed_bar_missing(missing_elapsed):
@@ -714,6 +725,7 @@ class StateMachine:
         self.round.capture_missing_start_time = 0
         self.round.result_quick_check_last = 0
         self.round.result_full_check_last = 0
+        self.bar_detector.reset_detection_recovery_state()
         self.result_det.clear_result_ready_candidate()
 
         now = time.time()

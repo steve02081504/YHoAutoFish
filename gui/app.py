@@ -1218,6 +1218,7 @@ class AppWindow(QMainWindow):
             "cast_animation_delay": 2,
             "settlement_close_delay": 1,
             "bar_missing_timeout": 3,
+            "cursor_recovery_sweep_timeout": 3,
             "pre_control_timeout": 14,
             "recovery_timeout": 8,
             "fishing_result_check_interval": 0.65,
@@ -1410,6 +1411,7 @@ class AppWindow(QMainWindow):
         self.sm.update_config("cast_animation_delay", self.config.get("cast_animation_delay", 2))
         self.sm.update_config("settlement_close_delay", self.config.get("settlement_close_delay", 1))
         self.sm.update_config("bar_missing_timeout", self.config.get("bar_missing_timeout", 3))
+        self.sm.update_config("cursor_recovery_sweep_timeout", self.config.get("cursor_recovery_sweep_timeout", 3))
         self.sm.update_config("pre_control_timeout", self.config.get("pre_control_timeout", 14))
         self.sm.update_config("recovery_timeout", self.config.get("recovery_timeout", 8))
         self.sm.update_config("fishing_result_check_interval", self.config.get("fishing_result_check_interval", 0.65))
@@ -2122,6 +2124,16 @@ class AppWindow(QMainWindow):
             "bar_missing_timeout",
         )
         timing_keys.append("bar_missing_timeout")
+        self.slider_cursor_recovery_sweep = self._settings_block(
+            timing_layout,
+            "浮标丢失左右脱困",
+            "浮标识别失败后先朝条中心移动；超过该秒数仍检测不到时，改为左右交替移动尝试脱困。",
+            self.config.get("cursor_recovery_sweep_timeout", 3),
+            1,
+            10,
+            "cursor_recovery_sweep_timeout",
+        )
+        timing_keys.append("cursor_recovery_sweep_timeout")
         self.slider_cast_delay = self._settings_block(
             timing_layout,
             "抛竿动画等待",

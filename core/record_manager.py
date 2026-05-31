@@ -9,11 +9,12 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 
-from core.paths import ensure_writable_file, resource_path
+from core.paths import ensure_writable_file, resource_path, writable_path
 
 _RECORD_FILE_LOCK = threading.RLock()
 ENCYCLOPEDIA_RESOURCE_DIR = "异环鱼类图鉴资源"
 ENCYCLOPEDIA_RESOURCE_DIR_ASCII = "fish_encyclopedia"
+AUTO_CAPTURED_RARITY = "未知稀有度"
 OCR_CONFUSABLE_CHARS = str.maketrans({
     "賽": "紫",
     "赛": "紫",
@@ -69,6 +70,72 @@ class RecordManager:
         if os.path.exists(primary):
             return primary
         return resource_path(ENCYCLOPEDIA_RESOURCE_DIR_ASCII)
+
+    def _encyclopedia_scan_roots(self):
+        roots = []
+        seen = set()
+        for candidate in (self.encyclopedia_dir, writable_path(ENCYCLOPEDIA_RESOURCE_DIR)):
+            normalized = os.path.normpath(candidate)
+            if normalized in seen or not os.path.isdir(normalized):
+                continue
+            seen.add(normalized)
+            roots.append(normalized)
+        return roots
+
+    @staticmethod
+    def _sanitize_filename(name):
+        cleaned = re.sub(r'[<>:"/\\|?*]', "", (name or "").strip())
+        return cleaned.strip(". ")
+
+    def _auto_encyclopedia_image_path(self, fish_name):
+        safe_name = self._sanitize_filename(fish_name)
+        if not safe_name:
+            return ""
+        return os.path.join(writable_path(ENCYCLOPEDIA_RESOURCE_DIR), AUTO_CAPTURED_RARITY, f"{safe_name}.png")
+
+    def resolve_canonical_fish_name(self, fish_name):
+        fish_name = (fish_name or "").strip()
+        if not fish_name:
+            return ""
+        encyclopedia = self.records.get("encyclopedia", {})
+        if fish_name in encyclopedia:
+            return fish_name
+        for name, data in encyclopedia.items():
+            if fish_name in self._canonical_name_candidates(name, data.get("image_path", "")):
+                return name
+        return fish_name
+
+    def fish_has_encyclopedia_image(self, fish_name):
+        canonical = self.resolve_canonical_fish_name(fish_name)
+        if canonical in {"", "未知鱼类", "未识别鱼类"}:
+            return True
+
+        encyclopedia = self.records.get("encyclopedia", {})
+        for name, data in encyclopedia.items():
+            if canonical != name and canonical not in self._canonical_name_candidates(name, data.get("image_path", "")):
+                continue
+            image_path = data.get("image_path", "")
+            if image_path and os.path.exists(image_path):
+                return True
+
+        auto_path = self._auto_encyclopedia_image_path(canonical)
+        return bool(auto_path and os.path.exists(auto_path))
+
+    def prepare_auto_encyclopedia_image_path(self, fish_name):
+        canonical = self.resolve_canonical_fish_name(fish_name)
+        if canonical in {"", "未知鱼类", "未识别鱼类"}:
+            return ""
+        if self.fish_has_encyclopedia_image(fish_name):
+            return ""
+
+        dest_path = self._auto_encyclopedia_image_path(canonical)
+        if not dest_path:
+            return ""
+        try:
+            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        except OSError:
+            return ""
+        return dest_path
 
     def _touch_cache(self):
         self._cache_version += 1
@@ -382,25 +449,28 @@ class RecordManager:
 
     def _scan_resource_catalog(self):
         catalog = {}
-        if not os.path.isdir(self.encyclopedia_dir):
-            return catalog
-
-        for rarity_dir in os.listdir(self.encyclopedia_dir):
-            rarity_path = os.path.join(self.encyclopedia_dir, rarity_dir)
-            if not os.path.isdir(rarity_path):
-                continue
-            for filename in os.listdir(rarity_path):
-                if not filename.lower().endswith(".png"):
+        for root in self._encyclopedia_scan_roots():
+            for rarity_dir in os.listdir(root):
+                rarity_path = os.path.join(root, rarity_dir)
+                if not os.path.isdir(rarity_path):
                     continue
-                fish_name = os.path.splitext(filename)[0]
-                catalog[fish_name] = {
-                    "caught_count": 0,
-                    "max_weight": 0,
-                    "rarity": rarity_dir,
-                    "image_path": os.path.join(rarity_path, filename),
-                    "first_caught_at": "",
-                    "last_caught_at": "",
-                }
+                for filename in os.listdir(rarity_path):
+                    if not filename.lower().endswith(".png"):
+                        continue
+                    fish_name = os.path.splitext(filename)[0]
+                    image_path = os.path.join(rarity_path, filename)
+                    if fish_name in catalog:
+                        existing_path = catalog[fish_name].get("image_path", "")
+                        if existing_path and os.path.exists(existing_path):
+                            continue
+                    catalog[fish_name] = {
+                        "caught_count": 0,
+                        "max_weight": 0,
+                        "rarity": rarity_dir,
+                        "image_path": image_path,
+                        "first_caught_at": "",
+                        "last_caught_at": "",
+                    }
         return catalog
 
     def _sync_encyclopedia_images(self):
