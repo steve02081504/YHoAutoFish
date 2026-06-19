@@ -54,6 +54,7 @@ class RoundState:
         self.last_control_error = 0
         self.last_control_target_w = None
         self.round_had_fishing_bar = False
+        # 检测恢复：耐力条丢失时在 ROI 内左右扫动以重新定位
         self.detection_recovery_sweep_direction = 1
         self.detection_recovery_sweep_last_switch = 0
 
@@ -71,6 +72,7 @@ class RoundState:
         self.success_recorded_pending_close = False
         self.success_close_retry_count = 0
         self.success_close_last_esc = 0
+        # 失败横幅防抖：低置信度匹配需连续出现同一签名才确认
         self.failed_result_candidate_seen_time = 0
         self.failed_result_candidate_count = 0
         self.failed_result_candidate_signature = ""

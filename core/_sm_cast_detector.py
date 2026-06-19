@@ -4,7 +4,6 @@
 """
 
 import time
-from pathlib import Path
 
 
 class CastDetector:
@@ -128,24 +127,6 @@ class CastDetector:
             "template": matched_path,
             "strategy": strategy_name,
         }
-
-    # ------------------------------------------------------------------
-    # 4. 是否存在初始钓鱼UI
-    # ------------------------------------------------------------------
-    def has_initial_fishing_ui(self, rect):
-        info = self.detect_cast_prompt_after_settlement(rect)
-        return bool(info and info.get("location"))
-
-    # ------------------------------------------------------------------
-    # 5. 格式化初始控件信息
-    # ------------------------------------------------------------------
-    def format_initial_controls(self, cluster_info):
-        parts = []
-        for item in (cluster_info or {}).get("matches", []):
-            matched_path = item.get("template")
-            matched_name = Path(matched_path).name if matched_path else "未知模板"
-            parts.append(f"{item.get('key')}:{item.get('confidence', 0):.2f}/{matched_name}/{item.get('strategy') or '默认'}")
-        return "；".join(parts) if parts else "无"
 
     # ------------------------------------------------------------------
     # 6. 检测是否已就绪可抛竿 (最大方法)

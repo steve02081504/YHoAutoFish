@@ -1,3 +1,5 @@
+"""鱼类图鉴面板 — 稀有度筛选、搜索、卡片网格与 ImageCache 联动。"""
+
 from PySide6.QtCore import QEasingCurve, QTimer, Qt, QVariantAnimation
 from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import (

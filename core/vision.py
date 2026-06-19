@@ -13,12 +13,6 @@ class VisionCore:
         self._kernel_3x3 = np.ones((3, 3), np.uint8)
         self._kernel_2x3 = np.ones((2, 3), np.uint8)
 
-    def update_hsv_config(self, color_name, min_val, max_val):
-        """用于GUI动态调节HSV参数"""
-        if color_name in self.hsv_config:
-            self.hsv_config[color_name]["min"] = min_val
-            self.hsv_config[color_name]["max"] = max_val
-
     def _read_template(self, template_path):
         path = os.fspath(template_path)
         if path in self._template_cache:
@@ -283,110 +277,6 @@ class VisionCore:
         if best_loc is not None and best_conf >= threshold:
             return best_loc, best_conf, best_path
         return None, best_conf, best_path
-
-    def find_template_matches(
-        self,
-        screen_img,
-        template_path,
-        threshold=0.75,
-        max_matches=12,
-        min_distance=24,
-        **kwargs,
-    ):
-        matches = []
-        if screen_img is None or not template_path:
-            return matches
-
-        use_edge = bool(kwargs.get("use_edge", False))
-        use_binary = bool(kwargs.get("use_binary", False))
-        binary_threshold = int(kwargs.get("binary_threshold", 200))
-        scale_range = kwargs.get("scale_range")
-        scale_steps = kwargs.get("scale_steps", 7)
-        use_mask = bool(kwargs.get("use_mask", False))
-        mask_threshold = int(kwargs.get("mask_threshold", 8))
-
-        try:
-            screen_gray = self._prepare_for_match(
-                screen_img,
-                use_edge=use_edge,
-                use_binary=use_binary,
-                binary_threshold=binary_threshold,
-            )
-            template_gray = self._template_for_match(
-                template_path,
-                use_edge=use_edge,
-                use_binary=use_binary,
-                binary_threshold=binary_threshold,
-            )
-            if screen_gray is None or template_gray is None:
-                return matches
-
-            template_mask = None
-            if use_mask:
-                template_mask = self._template_mask_for_match(
-                    template_path,
-                    use_edge=use_edge,
-                    use_binary=use_binary,
-                    binary_threshold=binary_threshold,
-                    mask_threshold=mask_threshold,
-                )
-
-            max_matches = max(1, int(max_matches))
-            min_distance = max(1, int(min_distance))
-            for scale in self._build_scales(scale_range=scale_range, scale_steps=scale_steps):
-                width = int(round(template_gray.shape[1] * scale))
-                height = int(round(template_gray.shape[0] * scale))
-                if width < 4 or height < 4 or width > screen_gray.shape[1] or height > screen_gray.shape[0]:
-                    continue
-
-                interpolation = cv2.INTER_NEAREST if use_binary else (cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR)
-                resized_template = cv2.resize(template_gray, (width, height), interpolation=interpolation)
-                if float(np.std(resized_template)) < 1.0:
-                    continue
-
-                resized_mask = None
-                match_method = cv2.TM_CCOEFF_NORMED
-                if template_mask is not None:
-                    resized_mask = cv2.resize(template_mask, (width, height), interpolation=cv2.INTER_NEAREST)
-                    _, resized_mask = cv2.threshold(resized_mask, 1, 255, cv2.THRESH_BINARY)
-                    if cv2.countNonZero(resized_mask) >= 5:
-                        match_method = cv2.TM_CCORR_NORMED
-                    else:
-                        resized_mask = None
-
-                if resized_mask is not None:
-                    res = cv2.matchTemplate(screen_gray, resized_template, match_method, mask=resized_mask)
-                else:
-                    res = cv2.matchTemplate(screen_gray, resized_template, match_method)
-                res = np.nan_to_num(res, nan=-1.0, posinf=-1.0, neginf=-1.0)
-
-                while len(matches) < max_matches:
-                    _, max_val, _, max_loc = cv2.minMaxLoc(res)
-                    max_val = max(-1.0, min(1.0, float(max_val)))
-                    if max_val < threshold:
-                        break
-                    center = (max_loc[0] + width // 2, max_loc[1] + height // 2)
-                    if all((center[0] - item["location"][0]) ** 2 + (center[1] - item["location"][1]) ** 2 >= min_distance**2 for item in matches):
-                        matches.append(
-                            {
-                                "location": center,
-                                "confidence": max_val,
-                                "template": template_path,
-                                "scale": scale,
-                                "size": (width, height),
-                            }
-                        )
-                    x1 = max(0, max_loc[0] - min_distance)
-                    y1 = max(0, max_loc[1] - min_distance)
-                    x2 = min(res.shape[1], max_loc[0] + width + min_distance)
-                    y2 = min(res.shape[0], max_loc[1] + height + min_distance)
-                    res[y1:y2, x1:x2] = -1.0
-
-            matches.sort(key=lambda item: item["confidence"], reverse=True)
-            return matches[:max_matches]
-        except Exception as e:
-            print(f"[Vision] Template multi-match error: {e}")
-            return []
 
     def find_best_template_multi_strategy(self, screen_img, template_paths, strategies, threshold=0.75, **base_kwargs):
         """使用多种预处理策略匹配模板，返回最可靠的命中。"""
@@ -1542,36 +1432,3 @@ class VisionCore:
                 best["track_score"] = track_score
                 best["confidence"] = max(0.0, min(0.88, base_conf * 0.58 + y_score * 0.16 + width_score * 0.10 + track_score * 0.16))
         return best
-
-    def _get_center_x(self, mask, is_vertical=False, strict_shape=True, return_width=False):
-        """从二值化掩码中找到最大的合法轮廓，并返回中心X坐标 (以及可选的宽度)"""
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not contours:
-            return None
-
-        # 按照面积从大到小排序，只取最大的那个，防止被背景的小噪点干扰
-        contours = sorted(contours, key=cv2.contourArea, reverse=True)
-
-        for cnt in contours:
-            x, y, w, h = cv2.boundingRect(cnt)
-            area = w * h
-
-            # 忽略过小的噪点
-            if area < 5:
-                continue
-
-            if strict_shape:
-                # 宽容的形态学过滤：
-                # 黄色游标 (is_vertical=True) 应该是竖着的，高大于宽，放宽要求
-                if is_vertical and w > h * 1.8:
-                    continue
-
-                # 绿色目标条 (is_vertical=False) 应该是横着的，宽大于高
-                if not is_vertical and h > w * 1.8:
-                    continue
-
-            if return_width:
-                return x + w // 2, w
-            return x + w // 2
-
-        return None

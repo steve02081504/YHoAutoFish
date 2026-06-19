@@ -1,6 +1,5 @@
 import json
 import os
-import random
 import re
 import tempfile
 import threading
@@ -12,8 +11,7 @@ from difflib import SequenceMatcher
 from core.paths import ensure_writable_file, resource_path, writable_path
 
 _RECORD_FILE_LOCK = threading.RLock()
-ENCYCLOPEDIA_RESOURCE_DIR = "异环鱼类图鉴资源"
-ENCYCLOPEDIA_RESOURCE_DIR_ASCII = "fish_encyclopedia"
+ENCYCLOPEDIA_DIR = "fish_encyclopedia"
 AUTO_CAPTURED_RARITY = "未知稀有度"
 OCR_CONFUSABLE_CHARS = str.maketrans(
     {
@@ -79,15 +77,12 @@ class RecordManager:
 
     @staticmethod
     def _default_encyclopedia_dir():
-        primary = resource_path(ENCYCLOPEDIA_RESOURCE_DIR)
-        if os.path.exists(primary):
-            return primary
-        return resource_path(ENCYCLOPEDIA_RESOURCE_DIR_ASCII)
+        return resource_path(ENCYCLOPEDIA_DIR)
 
     def _encyclopedia_scan_roots(self):
         roots = []
         seen = set()
-        for candidate in (self.encyclopedia_dir, writable_path(ENCYCLOPEDIA_RESOURCE_DIR)):
+        for candidate in (self.encyclopedia_dir, writable_path(ENCYCLOPEDIA_DIR)):
             normalized = os.path.normpath(candidate)
             if normalized in seen or not os.path.isdir(normalized):
                 continue
@@ -104,7 +99,7 @@ class RecordManager:
         safe_name = self._sanitize_filename(fish_name)
         if not safe_name:
             return ""
-        return os.path.join(writable_path(ENCYCLOPEDIA_RESOURCE_DIR), AUTO_CAPTURED_RARITY, f"{safe_name}.png")
+        return os.path.join(writable_path(ENCYCLOPEDIA_DIR), AUTO_CAPTURED_RARITY, f"{safe_name}.png")
 
     def resolve_canonical_fish_name(self, fish_name):
         fish_name = (fish_name or "").strip()
@@ -317,13 +312,6 @@ class RecordManager:
         text = text.translate(OCR_CONFUSABLE_CHARS)
         return text
 
-    def get_fish_name_alphabet(self):
-        chars = set()
-        for name, data in self.records.get("encyclopedia", {}).items():
-            for candidate in self._canonical_name_candidates(name, data.get("image_path", "")):
-                chars.update(self._normalize_name_text(candidate))
-        return "".join(sorted(chars))
-
     def _levenshtein_distance(self, left, right):
         if left == right:
             return 0
@@ -412,16 +400,6 @@ class RecordManager:
                     second_score = score
 
         return best_name, best_score, second_score
-
-    def resolve_fish_name(self, raw_name, loose=False):
-        normalized = self._normalize_name_text(raw_name)
-        best_name, best_score, second_score = self.rank_fish_name(raw_name, 1.0 if loose else 0.5, loose)
-        if not best_name:
-            return ""
-        threshold = self._fish_match_threshold(normalized)
-        if best_score >= 1.0 or (best_score >= threshold and best_score - second_score >= 0.035):
-            return best_name
-        return raw_name.strip()
 
     def resolve_fish_name_candidates(self, candidates):
         grouped = {}
@@ -537,79 +515,6 @@ class RecordManager:
         self._touch_cache()
         self.save_records()
 
-    def generate_sample_records(self):
-        encyclopedia = {}
-        for name, data in self._scan_resource_catalog().items():
-            encyclopedia[name] = {
-                "caught_count": 0,
-                "max_weight": 0,
-                "rarity": data.get("rarity", "未知稀有度"),
-                "image_path": data.get("image_path", ""),
-                "first_caught_at": "",
-                "last_caught_at": "",
-            }
-
-        fish_names = list(encyclopedia.keys())
-        history = []
-        randomizer = random.Random(20260424)
-        rarity_weight = {
-            "绿色稀有度": (25, 280),
-            "蓝色稀有度": (40, 420),
-            "紫色稀有度": (60, 560),
-            "金色稀有度": (80, 760),
-            "废品": (5, 60),
-            "未知稀有度": (15, 160),
-        }
-
-        selected = []
-        for rarity in ["绿色稀有度", "蓝色稀有度", "紫色稀有度", "金色稀有度", "废品"]:
-            same_rarity = [name for name, data in encyclopedia.items() if data.get("rarity") == rarity]
-            randomizer.shuffle(same_rarity)
-            selected.extend(same_rarity[: min(len(same_rarity), 8 if rarity != "废品" else 2)])
-
-        selected = selected[:34] if len(selected) > 34 else selected
-
-        for index in range(132):
-            fish_name = selected[index % len(selected)]
-            fish_data = encyclopedia[fish_name]
-            rarity = fish_data["rarity"]
-            weight_range = rarity_weight.get(rarity, (15, 160))
-            weight = randomizer.randint(*weight_range)
-
-            day = 1 + (index % 18)
-            hour = 8 + (index * 3) % 12
-            minute = (index * 7) % 60
-            timestamp = f"2026-04-{day:02d} {hour:02d}:{minute:02d}:00"
-
-            fish_data["caught_count"] += 1
-            fish_data["max_weight"] = max(fish_data["max_weight"], weight)
-            if not fish_data["first_caught_at"]:
-                fish_data["first_caught_at"] = timestamp
-            fish_data["last_caught_at"] = timestamp
-
-            history.append(
-                {
-                    "time": timestamp,
-                    "fish_name": fish_name,
-                    "weight": weight,
-                    "rarity": rarity,
-                    "image_path": fish_data["image_path"],
-                }
-            )
-
-        stats = {
-            "total_caught": len(history),
-            "total_time_seconds": 6 * 3600 + 42 * 60,
-            "total_attempts": len(history) + 19,
-            "consecutive_empty": 2,
-        }
-
-        return {
-            "stats": stats,
-            "encyclopedia": encyclopedia,
-            "history": history,
-        }
-
     def add_empty_catch(self):
         self.records["stats"]["total_attempts"] += 1
         self.records["stats"]["consecutive_empty"] += 1
@@ -715,12 +620,6 @@ class RecordManager:
     def get_encyclopedia(self):
         return dict(self.records["encyclopedia"])
 
-    def get_all_fishes_by_rarity(self):
-        grouped = defaultdict(dict)
-        for name, data in self.records["encyclopedia"].items():
-            grouped[data.get("rarity", "未知稀有度")][name] = data
-        return dict(grouped)
-
     def query_history(self, keyword="", rarity="全部稀有度", period="全部时间", weight_bucket="全部重量"):
         keyword = (keyword or "").strip().lower()
         period = period or "全部时间"
@@ -774,34 +673,3 @@ class RecordManager:
         for record in source:
             distribution[record.get("rarity", "未知稀有度")] += 1
         return dict(distribution)
-
-    def get_daily_trend(self, days=7):
-        points = defaultdict(int)
-        for record in self.records["history"]:
-            day = record.get("time", "")[:10]
-            if day:
-                points[day] += 1
-        days = max(1, int(days))
-        ordered_days = sorted(points.keys())[-days:]
-        return [(day, points[day]) for day in ordered_days]
-
-    def get_summary(self):
-        encyclopedia = self.records["encyclopedia"]
-        history = self.records["history"]
-        stats = self.records["stats"]
-
-        unlocked_count = sum(1 for data in encyclopedia.values() if data.get("caught_count", 0) > 0)
-        total_species = len(encyclopedia)
-        max_weight = max((int(data.get("max_weight", 0)) for data in encyclopedia.values()), default=0)
-        rarest_count = self.get_rarity_distribution(history).get("金色稀有度", 0)
-        success_rate = 0.0
-        if stats.get("total_attempts", 0) > 0:
-            success_rate = stats.get("total_caught", 0) / stats["total_attempts"] * 100
-
-        return {
-            "total_species": total_species,
-            "unlocked_species": unlocked_count,
-            "max_weight": max_weight,
-            "gold_caught": rarest_count,
-            "success_rate": success_rate,
-        }

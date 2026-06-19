@@ -1,3 +1,16 @@
+"""
+钓鱼结算结果检测 — 从 StateMachine 提取。
+
+检测分三档速度/精度，在溜鱼与结算阶段按场景选用：
+
+- ultrafast：最少 ROI、最少 scale 步，用于溜鱼过程中高频轮询
+- fast：中等覆盖，日常结算与快速确认
+- full（detect_success_result / detect_failed_result）：多 ROI、宽 scale 范围，用于空杆确认前的最终复核
+
+成功判定通常需要至少 2 个独立信号（关闭提示 / 重量 g / 经验条）交叉验证，
+以降低过渡动画或 HUD 残留造成的误报。
+"""
+
 import time
 from pathlib import Path
 
@@ -5,7 +18,7 @@ import cv2
 
 
 class ResultDetector:
-    """从 StateMachine 提取的结果检测相关方法集合。"""
+    """结算界面成功/失败特征识别与后续处理（记录、关窗、状态流转）。"""
 
     def __init__(self, sm):
         self._sm = sm
@@ -15,6 +28,7 @@ class ResultDetector:
     # ------------------------------------------------------------------ #
 
     def detect_failed_result(self, rect):
+        """全量失败检测：多 ROI + 多策略，用于空杆确认前的最后一轮复核。"""
         failed_templates = self._sm.tpl.failed_text_templates()
         if not failed_templates:
             return None
@@ -48,6 +62,7 @@ class ResultDetector:
         return None
 
     def match_result_signal(self, rect, kind, templates, rois, strategies, threshold, low_factor, high_factor, scale_steps):
+        """在多个相对 ROI 上尝试模板匹配，任一 ROI 达阈值即返回，否则返回置信度最高的一次。"""
         if not templates:
             return None
 
@@ -79,6 +94,7 @@ class ResultDetector:
         return None
 
     def build_success_result_info(self, success_signals):
+        """合并多个成功信号：位置取最强信号，综合置信度取平均并封顶 0.99。"""
         best = max(success_signals, key=lambda item: item["confidence"])
         return {
             "location": best.get("location"),
@@ -93,6 +109,7 @@ class ResultDetector:
     # ------------------------------------------------------------------ #
 
     def detect_ultrafast_success_result(self, rect):
+        """最快成功路径：优先「点击关闭」单信号，或「经验 + 重量 g」双信号组合。"""
         close_info = self.match_result_signal(
             rect,
             "click close prompt",
@@ -136,6 +153,8 @@ class ResultDetector:
         return None
 
     def detect_fast_success_result(self, rect, fast_only=False):
+        """快速成功检测。fast_only=True 时跳过 full 级 fallback，专供溜鱼中途轮询。"""
+        # 若 F 键抛竿提示仍可见，说明尚未进入结算，避免 HUD 误匹配
         if self._sm.cast_det.detect_initial_f_prompt_quick(rect, threshold=0.88):
             return None
         ultra_info = self.detect_ultrafast_success_result(rect)
@@ -223,6 +242,7 @@ class ResultDetector:
         )
 
     def detect_success_result(self, rect):
+        """全量成功检测：需至少 2 个信号同时命中（关闭 / 重量 / 经验任意组合）。"""
         if self._sm.cast_det.detect_initial_f_prompt_quick(rect, threshold=0.88):
             return None
 
@@ -336,6 +356,7 @@ class ResultDetector:
         return confidence >= 0.76
 
     def maybe_finish_failed_result(self, rect, failed_info, source_label="结算"):
+        """失败横幅判定：高置信度立即确认，低置信度需连续帧 + 再次排除成功结算。"""
         if not failed_info or not failed_info.get("location"):
             return False
 
@@ -384,6 +405,7 @@ class ResultDetector:
     # ------------------------------------------------------------------ #
 
     def check_result_signals_during_fishing(self, rect, elapsed):
+        """溜鱼控制循环内调用：按配置间隔检测成功/失败，命中则提前结束本轮。"""
         now = time.time()
         interval = self._sm._normalize_ratio_config("fishing_result_check_interval", 0.65, 0.35, 1.50)
         if now - getattr(self._sm.round, "fishing_result_check_last", 0) < interval:
@@ -405,6 +427,7 @@ class ResultDetector:
         return False
 
     def check_terminal_result_before_bar(self, rect, elapsed):
+        """耐力条尚未出现时的终端检测（鱼很快上钩或直接失败的情况）。"""
         now = time.time()
         interval = 0.25 if elapsed < 3.0 else 0.20
         if now - getattr(self._sm.round, "result_quick_check_last", 0) < interval:
@@ -511,6 +534,10 @@ class ResultDetector:
         return True
 
     def confirm_empty_ready_result(self, rect, ready_info, source_label="结算"):
+        """界面已回到可抛竿状态但无明确结算横幅时的空杆/成功关闭确认流程。
+
+        若本轮曾出现耐力条，会延长确认窗口并尝试 OCR 结算文字，避免动画未播完就记空杆。
+        """
         if not ready_info or not ready_info.get("location"):
             return False
         if getattr(self._sm.round, "success_recorded_pending_close", False):
@@ -600,6 +627,10 @@ class ResultDetector:
         return None
 
     def finish_success_result(self, rect, success_info, attempt=1, max_attempts=1, source_label="结算", settlement_info=None):
+        """记录钓获 → OCR 鱼名重量 → ESC 关窗 → 等待回到可抛竿界面。
+
+        success_recorded_pending_close 为 True 时跳过重复记录，仅重试关窗。
+        """
         if getattr(self._sm, "_stop_requested", False):
             return
         self.clear_failed_result_candidate()
@@ -649,6 +680,7 @@ class ResultDetector:
         self._sm.current_state = self._sm.STATE_RESULT
 
     def check_result_signals_after_bar_missing(self, rect, missing_elapsed):
+        """耐力条消失后的结算检测；missing_elapsed 越短轮询越密。"""
         now = time.time()
         interval = 0.12 if missing_elapsed < 1.5 else 0.22
         if now - getattr(self._sm.round, "result_quick_check_last", 0) < interval:

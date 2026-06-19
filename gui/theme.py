@@ -39,10 +39,6 @@ RARITY_META = {
 }
 
 
-def rarity_meta(rarity):
-    return RARITY_META.get(rarity, RARITY_META["未知稀有度"])
-
-
 def add_shadow(widget, blur=28, color="#000000", alpha=120, offset=(0, 10)):
     shadow = QGraphicsDropShadowEffect()
     shadow.setBlurRadius(blur)

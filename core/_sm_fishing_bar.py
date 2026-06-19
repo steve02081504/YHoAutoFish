@@ -13,6 +13,10 @@ class FishingBarDetector:
     # 耐力条检测结果过滤
     # ------------------------------------------------------------------
     def filter_bar_detection(self, target_x, cursor_x, target_w, confidence, roi_width):
+        """过滤单帧耐力条检测结果：低置信度/坐标跳变时用历史值或丢弃。
+
+        返回 (target_x, cursor_x, target_w, confidence, used_fallback)。
+        """
         now = time.time()
         if target_x is None or cursor_x is None or target_w is None:
             previous_time = getattr(self._sm.round, "last_valid_bar_time", 0)
@@ -37,6 +41,7 @@ class FishingBarDetector:
         if previous_cursor_x is not None and previous_cursor_time and now - previous_cursor_time <= 0.75:
             cursor_jump = abs(cursor_x - previous_cursor_x)
             cursor_jump_limit = max(72, int(roi_width * 0.24))
+            # 游标瞬移多为误检：前几次用上一帧位置平滑，超过 4 次则整帧丢弃
             if cursor_jump > cursor_jump_limit and confidence < 0.86:
                 self._sm.round.bar_cursor_jump_reject_count = int(getattr(self._sm.round, "bar_cursor_jump_reject_count", 0)) + 1
                 if self._sm.round.bar_cursor_jump_reject_count <= 4:

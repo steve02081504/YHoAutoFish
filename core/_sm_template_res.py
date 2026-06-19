@@ -21,6 +21,11 @@ class TemplateResources:
     # ------------------------------------------------------------------
 
     def resolve(self, cache_key, exact_names=(), required_keywords=()):
+        """从 assets 目录解析模板 PNG 路径。
+
+        先按 exact_names 精确匹配，再对 *.png 做 required_keywords 子串过滤。
+        结果按 cache_key 缓存，避免每帧重复扫描磁盘。
+        """
         if cache_key in self._cache:
             return self._cache[cache_key]
 
@@ -166,6 +171,11 @@ class TemplateResources:
     # ------------------------------------------------------------------
 
     def scale_range(self, rect, low_factor=0.65, high_factor=1.45):
+        """根据窗口客户区高度估算模板匹配的缩放上下界。
+
+        rect[3] 为窗口高度；以 900px 为基准得到 base_scale，
+        再乘以 low/high_factor 得到最终 (min_scale, max_scale)。
+        """
         if not rect:
             base_scale = 1.0
         else:

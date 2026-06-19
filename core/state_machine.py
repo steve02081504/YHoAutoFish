@@ -1,19 +1,7 @@
 import time
 import threading
-import queue
 import cv2
-import numpy as np
-import os
-import re
-import shutil
-import traceback
 from pathlib import Path
-
-try:
-    from importlib import metadata
-except ImportError:
-    metadata = None
-from PIL import Image, ImageDraw, ImageFont
 
 from core.window_manager import WindowManager
 from core.screen_capture import ScreenCapture
@@ -38,8 +26,6 @@ class StateMachine:
     STATE_WAITING = 1
     STATE_FISHING = 2
     STATE_RESULT = 3
-    STATE_FAILED = 4
-    STATE_PAUSED = 5
     STATE_RECOVERING = 6
     STATE_SELLING_CATCHES = 7
 
@@ -200,7 +186,6 @@ class StateMachine:
                 return
             self._stop_requested = True
             self.is_running = False
-            self.current_state = self.STATE_PAUSED
             self.ctrl.release_all()
         self._record_runtime_for_current_run()
         detail = reason or "检测到用户输入"
@@ -587,8 +572,6 @@ class StateMachine:
                 self._handle_fishing(rect, ROI_FISHING_BAR)
             elif self.current_state == self.STATE_RESULT:
                 self._handle_result(rect)
-            elif self.current_state == self.STATE_FAILED:
-                self._handle_failed()
             elif self.current_state == self.STATE_RECOVERING:
                 self._handle_recovering(rect)
             elif self.current_state == self.STATE_SELLING_CATCHES:
@@ -1081,9 +1064,3 @@ class StateMachine:
             return
 
         self._sleep_interruptible(0.2)
-
-    def _handle_failed(self):
-        # 注意: 这里的“溜走了”如果用户提供了图片，建议也走 find_template
-        # 目前暂时作为占位或使用超时跳出
-        self._log("[失败/结束] 释放按键，等待复位。")
-        self._enter_recovering("进入失败兜底状态", record_empty=True, press_esc=False)

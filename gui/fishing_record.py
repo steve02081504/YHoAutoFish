@@ -1,3 +1,5 @@
+"""钓鱼战绩面板 — 统计卡片、图表、历史记录表格与分享导出。"""
+
 import html
 import math
 import random

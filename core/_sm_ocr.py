@@ -1,3 +1,10 @@
+"""
+OCR 结算识别 — 从 StateMachine 提取。
+
+负责成功上鱼后读取鱼名/重量、维护 cnocr/cnstd 模型路径、
+图鉴截图自动保存与重量数字模板校正。
+"""
+
 import time
 import cv2
 import numpy as np
@@ -296,9 +303,6 @@ class SettlementOCR:
         candidates.sort(key=lambda item: item[1], reverse=True)
         return candidates
 
-    def collect_ocr_texts(self, image):
-        return [text for text, _ in self.collect_ocr_candidates(image)]
-
     # ------------------------------------------------------------------
     # 图像裁剪
     # ------------------------------------------------------------------
@@ -516,20 +520,6 @@ class SettlementOCR:
 
         value = int(compact)
         return value if 0 < value < 50000 else 0
-
-    def extract_weight_value(self, texts):
-        for text in texts:
-            value = self.parse_weight_text(text)
-            if value > 0:
-                return value
-        return 0
-
-    def is_plausible_name(self, text):
-        cleaned = re.sub(r"\s+", "", text or "")
-        if len(cleaned) < 2:
-            return False
-        banned = ["点击空白区域关闭", "获得钓鱼经验", "等级", "LEVEL", "RESULT", "MASTER"]
-        return not any(token in cleaned for token in banned)
 
     # ------------------------------------------------------------------
     # ROI 文本读取
