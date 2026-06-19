@@ -355,20 +355,9 @@ class StateMachine:
     def get_ocr_init_failure_message(self):
         return self.ocr_module.get_init_failure_message()
 
-    def prepare_recognition_modules(self, progress_fn=None):
-        """预热所有识别模块：OCR、视觉模板、HSV 色彩轮廓、形态学管线。
-
-        Parameters
-        ----------
-        progress_fn : callable, optional
-            进度回调，签名 progress_fn(message: str)。
-        """
+    def prepare_recognition_modules(self):
+        """预热所有识别模块：OCR、视觉模板、HSV 色彩轮廓、形态学管线。"""
         def _report(msg):
-            if progress_fn is not None:
-                try:
-                    progress_fn(msg)
-                except Exception:
-                    pass
             self._log(f"[预热] {msg}")
 
         # ── 第 1 步：OCR 运行时路径准备 ──
@@ -768,10 +757,6 @@ class StateMachine:
         det_result = self.bar_detector.select_fishing_bar_detection(rect, roi)
         target_x, cursor_x, target_w, debug_img, bar_confidence = det_result[:5]
         is_stale = det_result[5] if len(det_result) > 5 else False
-        debug_meta = det_result[6] if len(det_result) > 6 else None
-        # detection_confidence removed — fired at ~100Hz, flooding the analytics queue
-        # with 5000+ events per round and burying important events like fishing_success.
-        # Bar confidence is already captured by PerfSampler via perf_snapshot.
 
         # 性能优化：限制 Debug 图像的发送频率（一秒最多 10 帧），防止撑爆队列导致主线程阻塞
         if self.config.get("debug_mode", False) and debug_img is not None:
@@ -780,7 +765,6 @@ class StateMachine:
                 if self.debug_queue is not None and self.debug_queue.qsize() < 2:
                     self.debug_queue.put(debug_img)
                 self._last_debug_time = now
-                self._last_debug_meta = debug_meta
 
         # 判断是否结束 (无论是成功还是鱼儿溜走，耐力条都会消失)
         if target_x is None or cursor_x is None:
@@ -928,12 +912,6 @@ class StateMachine:
         # PID 控制器计算基础偏差修正力
         tracking_strength = self._normalize_tracking_strength()
         control_signal = self.pid.update(error, measurement=target_x) * tracking_strength
-        if not hasattr(self, '_pid_sample_counter'):
-            self._pid_sample_counter = 0
-        self._pid_sample_counter += 1
-        if self._pid_sample_counter >= 10:
-            self._pid_sample_counter = 0
-            # pid_metrics event removed — was flooding buffer at 10Hz
 
         ff_gain = self._normalize_ratio_config("feed_forward_gain", 0.18, 0.0, 0.45) * tracking_strength
         total_signal = control_signal + target_velocity * ff_gain
@@ -966,27 +944,6 @@ class StateMachine:
         if self._should_stop():
             return
         self._log("[结算] 正在检测钓鱼结果...")
-
-        # 极简模式：跳过结算识别，直接等待后进入下一轮
-        if self.config.get("minimal_settlement_mode", False):
-            self.ctrl.release_all()
-            wait_time = max(1.0, min(float(self.config.get("minimal_mode_wait", 2.5)), 5.0))
-            self._log(f"[结算] 极简模式：跳过结算识别，等待 {wait_time:.1f} 秒后继续...")
-            if not self._sleep_interruptible(wait_time):
-                return
-            self.record_mgr.add_catch_count_only()
-            self.fish_count += 1
-            self._record_auto_sell_catch()
-            self._esc_safe_gap(0.30)
-            if not self._tap_key_if_running('esc', duration=0.15):
-                return
-            close_delay = max(0.4, min(float(self.config.get("settlement_close_delay", 1)), 5.0))
-            if not self._sleep_interruptible(close_delay):
-                return
-            self._log(f"[结算] 极简模式：当前累计钓获: {self.fish_count} 条。")
-            self._reset_round_state()
-            self.current_state = self.STATE_IDLE
-            return
 
         max_attempts = 10 # 增加循环次数，但缩短每次的等待时间，实现更敏捷的响应
         if getattr(self.round, "success_recorded_pending_close", False):

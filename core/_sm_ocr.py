@@ -273,13 +273,11 @@ class SettlementOCR:
             return []
 
         candidates = []
-        t0 = time.perf_counter()
         try:
             result = ocr.ocr_for_single_line(image)
         except Exception as exc:
             self._sm._log(f"[识别] OCR 执行失败: {exc}")
             return []
-        elapsed_ms = (time.perf_counter() - t0) * 1000
 
         if isinstance(result, dict):
             cleaned = (result.get("text") or "").strip()

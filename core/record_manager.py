@@ -66,7 +66,6 @@ class RecordManager:
             "history": [],
             "summary": dict(self.DEFAULT_SUMMARY),
             "next_record_id": 1,
-            "last_synced_record_id": 0,
         }
         self._load_failed = False
         self._migration_needed = False
@@ -185,7 +184,6 @@ class RecordManager:
             summary.pop("last_record_id", None)
         self.records["summary"] = summary
         self.records["next_record_id"] = data.get("next_record_id", 1)
-        self.records["last_synced_record_id"] = data.get("last_synced_record_id", 0)
         self._migrate_record_ids()
         self._touch_cache()
 
@@ -676,14 +674,6 @@ class RecordManager:
             }
         )
 
-        self._touch_cache()
-        self.save_records()
-
-    def add_catch_count_only(self):
-        """极简模式：仅增加统计数据，不记录历史详情。"""
-        self.records["stats"]["total_caught"] += 1
-        self.records["stats"]["total_attempts"] += 1
-        self.records["stats"]["consecutive_empty"] = 0
         self._touch_cache()
         self.save_records()
 

@@ -8,8 +8,6 @@ class FishingBarDetector:
 
     def __init__(self, sm):
         self._sm = sm
-        self._debug_fps = None
-        self._debug_latency_ms = None
 
     # ------------------------------------------------------------------
     # 耐力条检测结果过滤
@@ -130,11 +128,6 @@ class FishingBarDetector:
                 "capture_failed": True,
             }
 
-        fps_val = None
-        latency_val = None
-        if draw_debug:
-            t0 = time.time()
-
         result = self._sm.vis.analyze_fishing_bar(
             bar_img,
             cursor_template_paths=self.cursor_templates_for_current_frame(),
@@ -143,22 +136,8 @@ class FishingBarDetector:
             cursor_scale_range=self._sm.tpl.scale_range(rect, 0.70, 1.55),
             cursor_scale_steps=5,
             draw_debug=draw_debug,
-            fps=self._debug_fps if draw_debug else None,
-            latency_ms=self._debug_latency_ms if draw_debug else None,
         )
         target_x, cursor_x, target_w, debug_img, confidence = result[:5]
-        debug_meta = result[5] if len(result) > 5 else None
-
-        if draw_debug:
-            latency_val = (time.time() - t0) * 1000.0
-            self._debug_latency_ms = latency_val
-            now = time.time()
-            prev = getattr(self._sm, "_last_debug_time", 0)
-            if prev > 0:
-                dt = now - prev
-                if dt > 0:
-                    self._debug_fps = 1.0 / dt
-            # _last_debug_time is updated later in state_machine.py when queued
 
         target_x, cursor_x = self.bar_local_to_client_x(rect, roi, target_x, cursor_x)
         return {
@@ -170,7 +149,6 @@ class FishingBarDetector:
             "width": bar_img.shape[1],
             "roi": roi,
             "capture_failed": False,
-            "debug_meta": debug_meta,
         }
 
     # ------------------------------------------------------------------
@@ -198,7 +176,7 @@ class FishingBarDetector:
         )
         target_x, cursor_x, target_w, confidence = filtered[:4]
         is_stale = filtered[4] if len(filtered) > 4 else False
-        return target_x, cursor_x, target_w, primary.get("debug_img"), confidence, is_stale, primary.get("debug_meta")
+        return target_x, cursor_x, target_w, primary.get("debug_img"), confidence, is_stale
 
     # ------------------------------------------------------------------
     # 断帧保持
