@@ -14,13 +14,48 @@ from core.paths import resource_path
 CnOcr = None
 
 OCR_MODEL_BUNDLE_DIR = "ocr_models"
-OCR_REQUIRED_MODELS = (
-    (
-        "cnocr",
-        ("2.3", "densenet_lite_136-gru"),
-        "cnocr-v2.3-densenet_lite_136-gru-epoch=004-ft-model.onnx",
-    ),
-)
+# Glob patterns for required OCR model files (avoids hardcoding exact filenames
+# that change across cnocr versions, e.g. cnocr-v2.3 → cnocr-v2.4).
+# Paths are relative to each package's root (e.g. APPDATA/cnocr, APPDATA/cnstd).
+OCR_REQUIRED_MODEL_GLOBS = {
+    "cnocr": "2.3/densenet_lite_136-gru/*.onnx",
+}
+
+# Auto-detected det model name (cached after first detection)
+_auto_det_model_name = None
+
+
+def _detect_det_model_name(cnstd_root):
+    """Scan cnstd cache to find the first available detection model name."""
+    global _auto_det_model_name
+    if _auto_det_model_name is not None:
+        return _auto_det_model_name
+    root = Path(cnstd_root)
+    if not root.exists():
+        return "naive_det"
+    # cnstd stores models under version/ppocr/<model_name>/ or version/<model_name>/
+    for version_dir in sorted(root.iterdir()):
+        if not version_dir.is_dir():
+            continue
+        for sub in sorted(version_dir.iterdir()):
+            if not sub.is_dir():
+                continue
+            # ppocr sub-directory
+            if sub.name == "ppocr":
+                for model_dir in sorted(sub.iterdir()):
+                    if model_dir.is_dir() and any(model_dir.rglob("*.onnx")):
+                        _auto_det_model_name = model_dir.name
+                        return _auto_det_model_name
+            elif any(sub.rglob("*.onnx")):
+                _auto_det_model_name = sub.name
+                return _auto_det_model_name
+    # Fallback: try known names in priority order
+    for name in ("ch_PP-OCRv5_det", "ch_PP-OCRv4_det", "naive_det"):
+        candidates = list(root.rglob(f"{name}*/*.onnx"))
+        if candidates:
+            _auto_det_model_name = name
+            return _auto_det_model_name
+    return "naive_det"
 
 SETTLEMENT_FISH_IMAGE_ROIS = (
     (0.33, 0.24, 0.34, 0.34),
@@ -82,11 +117,12 @@ class SettlementOCR:
 
     def package_version(self, package_name):
         try:
-            return metadata.version(package_name)
-        except metadata.PackageNotFoundError:
-            return "未安装"
+            ver = metadata.version(package_name)
+            if ver == "0.0.0":
+                return "N/A"
+            return ver
         except Exception:
-            return "未知"
+            return "未安装"
 
     # ------------------------------------------------------------------
     # OCR 运行时路径准备
@@ -116,13 +152,14 @@ class SettlementOCR:
     def missing_required_ocr_models(self):
         roots = self.prepare_ocr_runtime_roots()
         missing = []
-        for package_name, rel_parts, filename in OCR_REQUIRED_MODELS:
+        for package_name, pattern in OCR_REQUIRED_MODEL_GLOBS.items():
             root = roots.get(package_name)
             if root is None:
+                missing.append(f"{package_name}: root not set")
                 continue
-            fp = root.joinpath(*rel_parts, filename)
-            if not fp.exists():
-                missing.append(fp)
+            matches = list(root.glob(pattern))
+            if not matches:
+                missing.append(root / pattern)
         return missing
 
     # ------------------------------------------------------------------
@@ -141,7 +178,7 @@ class SettlementOCR:
             parts.append(
                 "缺少本地 OCR 模型文件："
                 + "；".join(str(path) for path in missing_models)
-                + "。请使用包含 ocr_models 目录的完整发布包，或重新执行 build_release.ps1 打包。"
+                + "。请确保项目根目录下存在完整的 ocr_models 目录。"
             )
 
         parts.append(
@@ -205,8 +242,9 @@ class SettlementOCR:
             return None
         if mode not in self.ocr:
             try:
+                det_name = _detect_det_model_name(str(roots["cnstd"]))
                 common_kwargs = {
-                    "det_model_name": "naive_det",
+                    "det_model_name": det_name,
                     "rec_root": str(roots["cnocr"]),
                     "det_root": str(roots["cnstd"]),
                 }
@@ -235,11 +273,13 @@ class SettlementOCR:
             return []
 
         candidates = []
+        t0 = time.perf_counter()
         try:
             result = ocr.ocr_for_single_line(image)
         except Exception as exc:
             self._sm._log(f"[识别] OCR 执行失败: {exc}")
             return []
+        elapsed_ms = (time.perf_counter() - t0) * 1000
 
         if isinstance(result, dict):
             cleaned = (result.get("text") or "").strip()

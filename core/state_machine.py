@@ -8,7 +8,10 @@ import re
 import shutil
 import traceback
 from pathlib import Path
-from importlib import metadata
+try:
+    from importlib import metadata
+except ImportError:
+    metadata = None
 from PIL import Image, ImageDraw, ImageFont
 
 from core.window_manager import WindowManager
@@ -27,17 +30,6 @@ from core._sm_fishing_bar import FishingBarDetector
 from core._sm_ocr import SettlementOCR
 from core._sm_cast_detector import CastDetector
 from core._sm_result_detector import ResultDetector
-
-CnOcr = None
-
-OCR_MODEL_BUNDLE_DIR = "ocr_models"
-OCR_REQUIRED_MODELS = (
-    (
-        "cnocr",
-        ("2.3", "densenet_lite_136-gru"),
-        "cnocr-v2.3-densenet_lite_136-gru-epoch=004-ft-model.onnx",
-    ),
-)
 
 class StateMachine:
     STATE_IDLE = 0
@@ -75,7 +67,8 @@ class StateMachine:
         self._auto_sell_last_log = 0
         self._auto_sell_ready_wait_started = 0
         self._auto_sell_capture_hidden = False
-        
+        self._last_esc_time = 0.0
+
         # 实例化真正的 PID 控制器
         # Kp: 比例，影响追赶速度
         # Ki: 积分，消除长期偏差（设为极小）
@@ -132,6 +125,14 @@ class StateMachine:
     def _should_stop(self):
         return bool(getattr(self, "_stop_requested", False) or not getattr(self, "is_running", False))
 
+    def _esc_safe_gap(self, min_gap=0.30):
+        """ESC按键防抖：确保距上次ESC至少min_gap秒，不足则sleep补足。"""
+        now = time.time()
+        elapsed = now - self._last_esc_time
+        if elapsed < min_gap:
+            time.sleep(min_gap - elapsed)
+            self._last_esc_time = time.time()
+
     def _tap_key_if_running(self, key, duration=0.01):
         with self._input_lock:
             if self._should_stop():
@@ -140,6 +141,8 @@ class StateMachine:
                 return False
             self._note_program_input((key,), duration=float(duration) + 0.45)
             self.ctrl.key_tap(key, duration=duration)
+            if key == 'esc':
+                self._last_esc_time = time.time()
             return True
 
     def _sleep_interruptible(self, seconds, step=0.05):
@@ -325,8 +328,22 @@ class StateMachine:
         self.current_state = self.STATE_RECOVERING
         self._log(f"[恢复] {reason}，开始等待可抛钩界面恢复。")
 
+    def _push_debug_status_frame(self, text):
+        """向调试队列推送一帧状态标记画面，避免调试视图冻结无反馈。"""
+        if not self.config.get("debug_mode", False) or self.debug_queue is None:
+            return
+        try:
+            import cv2 as _cv2
+            frame = _cv2.zeros((60, 300, 3), dtype="uint8")
+            _cv2.putText(frame, text, (10, 40), _cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 255), 2)
+            if self.debug_queue.qsize() < 2:
+                self.debug_queue.put(frame)
+        except Exception:
+            pass
+
     def _enter_result_from_fishing_anomaly(self, reason):
         self._log(f"[溜鱼] {reason}，进入结果判定...")
+        self._push_debug_status_frame(reason[:30])
         self.ctrl.release_all()
         self.round.fish_control_direction = 0
         self.round.fish_control_min_hold_until = 0
@@ -337,21 +354,85 @@ class StateMachine:
 
     def get_ocr_init_failure_message(self):
         return self.ocr_module.get_init_failure_message()
-        if self.ocr_module.last_ocr_init_error:
-            return "OCR 模块初始化失败：" + self.ocr_module.last_ocr_init_error
-        missing_models = self.ocr_module.missing_required_ocr_models()
-        if missing_models:
-            return "OCR 模块初始化失败：本地 OCR 模型缺失，请使用完整发布包。"
-        return "OCR 模块初始化失败，请检查完整发布包、cnocr/cnstd/onnxruntime 依赖与本地模型缓存。"
 
-    def prepare_recognition_modules(self):
-        """预热结算识别所需的 OCR 模块，避免首次上鱼时才加载导致卡顿。"""
-        self.ocr_module.prepare_ocr_runtime_roots()
+    def prepare_recognition_modules(self, progress_fn=None):
+        """预热所有识别模块：OCR、视觉模板、HSV 色彩轮廓、形态学管线。
+
+        Parameters
+        ----------
+        progress_fn : callable, optional
+            进度回调，签名 progress_fn(message: str)。
+        """
+        def _report(msg):
+            if progress_fn is not None:
+                try:
+                    progress_fn(msg)
+                except Exception:
+                    pass
+            self._log(f"[预热] {msg}")
+
+        # ── 第 1 步：OCR 运行时路径准备 ──
+        t0 = time.perf_counter()
+        _report("步骤 1/6: 准备 OCR 运行时路径...")
+        try:
+            self.ocr_module.prepare_ocr_runtime_roots()
+        except Exception as exc:
+            self._log(f"[预热] OCR 路径准备失败（非致命）: {exc}")
+        _report(f"步骤 1/6 完成 ({time.perf_counter() - t0:.2f}s)")
+
+        # ── 第 2 步：OCR 模型加载 ──
+        t0 = time.perf_counter()
+        _report("步骤 2/6: 加载 OCR 识别模型（名称/重量/通用）...")
         name_ocr = self.ocr_module.ensure_ocr("name")
         weight_ocr = self.ocr_module.ensure_ocr("weight")
         general_ocr = self.ocr_module.ensure_ocr("general")
-        # 图像兜底匹配同样需要首次构建特征，放在初始化阶段完成。
-        self.ocr_module.load_fish_matcher_refs()
+        _report(f"步骤 2/6 完成 ({time.perf_counter() - t0:.2f}s)")
+
+        # ── 第 3 步：图像兜底匹配参考图 ──
+        t0 = time.perf_counter()
+        _report("步骤 3/6: 加载图像兜底匹配参考图...")
+        try:
+            self.ocr_module.load_fish_matcher_refs()
+        except Exception as exc:
+            self._log(f"[预热] 图像匹配参考加载失败（非致命）: {exc}")
+        _report(f"步骤 3/6 完成 ({time.perf_counter() - t0:.2f}s)")
+
+        # ── 第 4 步：模板 PNG 预加载 ──
+        t0 = time.perf_counter()
+        _report("步骤 4/6: 预加载全部模板 PNG...")
+        preheat_warn = False
+        try:
+            self._preload_all_templates()
+        except Exception as exc:
+            self._log(f"[预热] ⚠️ 模板预加载失败: {exc}")
+            _report(f"⚠️ 步骤 4/6 模板预加载失败: {exc}")
+            preheat_warn = True
+        _report(f"步骤 4/6 完成 ({time.perf_counter() - t0:.2f}s)")
+
+        # ── 第 5 步：HSV 色彩轮廓预计算 ──
+        t0 = time.perf_counter()
+        _report("步骤 5/6: 预计算 HSV 色彩轮廓...")
+        try:
+            self._precompute_color_profiles()
+        except Exception as exc:
+            self._log(f"[预热] ⚠️ 色彩轮廓预计算失败: {exc}")
+            _report(f"⚠️ 步骤 5/6 色彩轮廓预计算失败: {exc}")
+            preheat_warn = True
+        _report(f"步骤 5/6 完成 ({time.perf_counter() - t0:.2f}s)")
+
+        # ── 第 6 步：analyze_fishing_bar 哑调用 ──
+        t0 = time.perf_counter()
+        _report("步骤 6/6: 预热耐力条分析管线（dummy call）...")
+        try:
+            self._preheat_analyze_fishing_bar()
+        except Exception as exc:
+            self._log(f"[预热] ⚠️ 耐力条管线预热失败: {exc}")
+            _report(f"⚠️ 步骤 6/6 耐力条管线预热失败: {exc}")
+            preheat_warn = True
+        _report(f"步骤 6/6 完成 ({time.perf_counter() - t0:.2f}s)")
+
+        if preheat_warn:
+            _report("⚠️ 部分预热步骤失败，首帧处理可能较慢")
         return name_ocr is not None and weight_ocr is not None and general_ocr is not None
 
     def probe_ready_to_cast(self):
@@ -381,6 +462,60 @@ class StateMachine:
                 pass
             self.sc = previous_sc
 
+    def _preload_all_templates(self):
+        """预加载 TemplateResources 中所有模板 PNG 到 VisionCore 的缓存。"""
+        accessor_methods = [
+            self.tpl.f_button_templates,
+            self.tpl.initial_q_button_templates,
+            self.tpl.initial_e_button_templates,
+            self.tpl.initial_r_button_templates,
+            self.tpl.ready_start_button_templates,
+            self.tpl.ready_panel_templates,
+            self.tpl.hook_text_templates,
+            self.tpl.failed_text_templates,
+            self.tpl.weight_unit_templates,
+            self.tpl.success_close_prompt_templates,
+            self.tpl.success_exp_templates,
+            self.tpl.cursor_templates,
+            self.tpl.target_bar_templates,
+            self.tpl.auto_sell_fish_cabin_templates,
+            self.tpl.auto_sell_one_click_templates,
+            self.tpl.auto_sell_confirm_templates,
+        ]
+        total = 0
+        for accessor in accessor_methods:
+            for p in accessor():
+                self.vis._read_template(p)
+                total += 1
+        self._log(f"[预热] 已预加载 {total} 个模板文件。")
+
+    def _precompute_color_profiles(self):
+        """预计算耐力条分析所需的 HSV 色彩轮廓。"""
+        target_paths = self.tpl.target_bar_templates()
+        if target_paths:
+            self.vis._target_color_profile(target_paths)
+        cursor_paths = self.tpl.cursor_templates()
+        if cursor_paths:
+            self.vis._cursor_color_profile(cursor_paths)
+        self._log("[预热] HSV 色彩轮廓已缓存。")
+
+    def _preheat_analyze_fishing_bar(self):
+        """用合成小图像调用一次 analyze_fishing_bar，预热所有内部处理管线。"""
+        import numpy as _np
+        dummy_img = _np.zeros((20, 200, 3), dtype=_np.uint8)
+        cursor_paths = self.tpl.cursor_templates()
+        target_paths = self.tpl.target_bar_templates()
+        self.vis.analyze_fishing_bar(
+            dummy_img,
+            cursor_template_paths=cursor_paths,
+            cursor_color_reference_paths=cursor_paths,
+            target_color_reference_paths=target_paths,
+            cursor_scale_range=(0.5, 2.0),
+            cursor_scale_steps=5,
+            draw_debug=False,
+        )
+        self._log("[预热] analyze_fishing_bar 管线已预热。")
+
     def _run_loop(self):
         # 确保在当前线程中实例化 ScreenCapture
         self.sc = ScreenCapture()
@@ -409,8 +544,8 @@ class StateMachine:
 
         # 恢复合理的高度范围，根据用户提供的精确比例进行定位：
         # 横向占比是30%到70% (X: 0.3, Width: 0.4)
-        # 竖向占比是从5.56%到8.33% (Y: 0.0556, Height: 0.0277)
-        ROI_FISHING_BAR = (0.3, 0.0556, 0.4, 0.0277) 
+        # 竖向占比是从6.21%到7.68% (Y: 0.0621, Height: 0.0147)
+        ROI_FISHING_BAR = (0.3, 0.0621, 0.4, 0.0147)
         
         ROI_CENTER_TEXT = (0.2, 0.2, 0.6, 0.5)
         
@@ -550,10 +685,9 @@ class StateMachine:
         now = time.time()
         text_img = self.sc.capture_relative(rect, *roi)
         if text_img is None: return
-        
-        # 每次重新抛竿后，重置 PID 控制器状态
+
         self.pid.reset()
-        
+
         loc, conf, matched_path = self.vis.find_best_template(
             text_img,
             self.tpl.hook_text_templates(),
@@ -622,6 +756,7 @@ class StateMachine:
         elapsed = time.time() - self.round.fishing_start_time
         if elapsed > self.fishing_timeout:
             self._log("[防卡死] 溜鱼超时，强制结束当前回合。")
+            self._push_debug_status_frame("fishing timeout -> RESULT")
             self.round.fishing_start_time = 0
             self.current_state = self.STATE_RESULT
             return
@@ -630,15 +765,22 @@ class StateMachine:
         if elapsed >= 1.0 and not getattr(self.round, 'confirmed_fishing_bar', False) and not recent_bar_seen and self.result_det.check_terminal_result_before_bar(rect, elapsed):
             return
 
-        target_x, cursor_x, target_w, debug_img, bar_confidence = self.bar_detector.select_fishing_bar_detection(rect, roi)
-        
+        det_result = self.bar_detector.select_fishing_bar_detection(rect, roi)
+        target_x, cursor_x, target_w, debug_img, bar_confidence = det_result[:5]
+        is_stale = det_result[5] if len(det_result) > 5 else False
+        debug_meta = det_result[6] if len(det_result) > 6 else None
+        # detection_confidence removed — fired at ~100Hz, flooding the analytics queue
+        # with 5000+ events per round and burying important events like fishing_success.
+        # Bar confidence is already captured by PerfSampler via perf_snapshot.
+
         # 性能优化：限制 Debug 图像的发送频率（一秒最多 10 帧），防止撑爆队列导致主线程阻塞
         if self.config.get("debug_mode", False) and debug_img is not None:
             now = time.time()
-            if getattr(self, '_last_debug_time', 0) == 0 or (now - self._last_debug_time) >= 0.25:
+            if getattr(self, '_last_debug_time', 0) == 0 or (now - self._last_debug_time) >= 0.10:
                 if self.debug_queue is not None and self.debug_queue.qsize() < 2:
                     self.debug_queue.put(debug_img)
                 self._last_debug_time = now
+                self._last_debug_meta = debug_meta
 
         # 判断是否结束 (无论是成功还是鱼儿溜走，耐力条都会消失)
         if target_x is None or cursor_x is None:
@@ -664,6 +806,10 @@ class StateMachine:
                 self.round.capture_missing_start_time = 0
 
             if self.bar_detector.hold_recent_fishing_control_on_gap():
+                # Even during gap-hold, enforce fishing timeout to prevent permanent freeze
+                elapsed = time.time() - self.round.fishing_start_time
+                if elapsed > self.fishing_timeout:
+                    self._enter_result_from_fishing_anomaly("溜鱼超时（保持控制期间）")
                 return
 
             if not getattr(self.round, 'fishing_control_started', False):
@@ -671,7 +817,7 @@ class StateMachine:
                 self.round.fish_control_direction = 0
                 self.round.fish_control_min_hold_until = 0
                 self.bar_detector.reset_detection_recovery_state()
-                
+
                 last_seen_time = getattr(self.round, 'last_bar_seen_time', 0)
                 if last_seen_time and time.time() - last_seen_time > 0.55:
                     self.round.bar_seen_streak = 0
@@ -709,7 +855,12 @@ class StateMachine:
             # 引入容错：偶尔一帧没识别到不算结束，连续丢失超过用户设定才算结束
             missing_elapsed = time.time() - self.round.missing_start_time
             self.bar_detector.apply_detection_recovery(rect, roi, missing_elapsed)
-            if missing_elapsed >= 0.12 and self.result_det.check_result_signals_after_bar_missing(rect, missing_elapsed):
+            # 最小溜鱼时间守卫：溜鱼开始后 3 秒内不退出 FISHING 状态
+            # 防止特效/粒子短暂遮挡耐力条导致误判"鱼溜走了"
+            fishing_elapsed = time.time() - getattr(self.round, 'fishing_start_time', 0)
+            if fishing_elapsed < 3.0:
+                return
+            if missing_elapsed >= 0.50 and self.result_det.check_result_signals_after_bar_missing(rect, missing_elapsed):
                 return
             if self.bar_detector.should_enter_result_after_confirmed_bar_missing(missing_elapsed):
                 self.bar_detector.enter_result_after_bar_missing()
@@ -730,16 +881,20 @@ class StateMachine:
 
         now = time.time()
         last_seen_time = getattr(self.round, 'last_bar_seen_time', 0)
-        if last_seen_time and now - last_seen_time <= 0.55:
-            self.round.bar_seen_streak = int(getattr(self.round, 'bar_seen_streak', 0)) + 1
-        else:
-            self.round.bar_seen_streak = 1
-            self.round.bar_first_seen_time = now
-        self.round.last_bar_seen_time = now
+        if not is_stale:
+            if last_seen_time and now - last_seen_time <= 0.55:
+                self.round.bar_seen_streak = int(getattr(self.round, 'bar_seen_streak', 0)) + 1
+            else:
+                self.round.bar_seen_streak = 1
+                self.round.bar_first_seen_time = now
+            self.round.last_bar_seen_time = now
         self.round.seen_fishing_bar = True
         if not getattr(self.round, 'confirmed_fishing_bar', False) and self.round.bar_seen_streak >= 2:
             self.round.confirmed_fishing_bar = True
             self.round.fishing_bar_confirmed_time = now
+            if not getattr(self.round, "fishing_control_started", False):
+                self.round.fishing_control_started = True
+                self.round.fishing_control_started_time = now
 
         # === 核心追踪算法：直接误差 + 滞回保持 ===
         # A/D 是离散按键，不是连续舵量；真实游戏里视觉速度噪声较大，
@@ -772,8 +927,14 @@ class StateMachine:
         
         # PID 控制器计算基础偏差修正力
         tracking_strength = self._normalize_tracking_strength()
-        control_signal = self.pid.update(error) * tracking_strength
-        
+        control_signal = self.pid.update(error, measurement=target_x) * tracking_strength
+        if not hasattr(self, '_pid_sample_counter'):
+            self._pid_sample_counter = 0
+        self._pid_sample_counter += 1
+        if self._pid_sample_counter >= 10:
+            self._pid_sample_counter = 0
+            # pid_metrics event removed — was flooding buffer at 10Hz
+
         ff_gain = self._normalize_ratio_config("feed_forward_gain", 0.18, 0.0, 0.45) * tracking_strength
         total_signal = control_signal + target_velocity * ff_gain
 
@@ -806,6 +967,27 @@ class StateMachine:
             return
         self._log("[结算] 正在检测钓鱼结果...")
 
+        # 极简模式：跳过结算识别，直接等待后进入下一轮
+        if self.config.get("minimal_settlement_mode", False):
+            self.ctrl.release_all()
+            wait_time = max(1.0, min(float(self.config.get("minimal_mode_wait", 2.5)), 5.0))
+            self._log(f"[结算] 极简模式：跳过结算识别，等待 {wait_time:.1f} 秒后继续...")
+            if not self._sleep_interruptible(wait_time):
+                return
+            self.record_mgr.add_catch_count_only()
+            self.fish_count += 1
+            self._record_auto_sell_catch()
+            self._esc_safe_gap(0.30)
+            if not self._tap_key_if_running('esc', duration=0.15):
+                return
+            close_delay = max(0.4, min(float(self.config.get("settlement_close_delay", 1)), 5.0))
+            if not self._sleep_interruptible(close_delay):
+                return
+            self._log(f"[结算] 极简模式：当前累计钓获: {self.fish_count} 条。")
+            self._reset_round_state()
+            self.current_state = self.STATE_IDLE
+            return
+
         max_attempts = 10 # 增加循环次数，但缩短每次的等待时间，实现更敏捷的响应
         if getattr(self.round, "success_recorded_pending_close", False):
             ready_info = self.cast_det.detect_ready_to_cast(rect, allow_heavy=False, require_initial_controls=True)
@@ -816,7 +998,7 @@ class StateMachine:
             now = time.time()
             close_delay = max(0.4, min(float(self.config.get("settlement_close_delay", 1)), 5.0))
             retry_count = int(getattr(self.round, "success_close_retry_count", 0))
-            if now - getattr(self.round, "success_close_last_esc", 0) >= max(0.75, close_delay):
+            if now - getattr(self.round, "success_close_last_esc", 0) >= max(0.75, close_delay, 0.30):
                 success_info = self.result_det.detect_success_settlement_still_visible(rect)
                 if success_info and retry_count < max_attempts:
                     self.result_det.finish_success_result(
@@ -906,20 +1088,25 @@ class StateMachine:
 
         if getattr(self.round, "recovery_esc_requested", False) and not getattr(self.round, "recovery_esc_sent", False):
             self.ctrl.release_all()
+            self._esc_safe_gap(0.30)
             if not self._tap_key_if_running('esc', duration=0.15):
                 return
             self.round.recovery_esc_sent = True
+            self.round.recovery_first_esc_time = time.time()
             self._sleep_interruptible(0.35)
             return
 
+        first_esc_elapsed = now - getattr(self.round, "recovery_first_esc_time", 0) if getattr(self.round, "recovery_esc_sent", False) else 999
         if (
             getattr(self.round, "recovery_esc_requested", False)
             and getattr(self.round, "recovery_allow_second_esc", True)
             and elapsed >= 3.0
+            and first_esc_elapsed >= 1.0
             and not getattr(self.round, "recovery_second_esc_sent", False)
         ):
             self._log("[恢复] 暂未看到可抛钩提示，执行一次轻量 ESC 复位。")
             self.ctrl.release_all()
+            self._esc_safe_gap(0.30)
             if not self._tap_key_if_running('esc', duration=0.12):
                 return
             self.round.recovery_second_esc_sent = True

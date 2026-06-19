@@ -1,8 +1,6 @@
-#! python3.9
 import sys
 import os
 
-# Ensure modules can be found
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from core.admin import ensure_admin_or_relaunch
@@ -21,17 +19,14 @@ from core.version import APP_DISPLAY_NAME, APP_NAME, APP_VERSION
 from gui.app import AppWindow
 
 if __name__ == '__main__':
-    print("Starting app...", flush=True)
     app = QApplication(sys.argv)
-    
+
     app.setApplicationName(APP_NAME)
     app.setApplicationDisplayName(APP_DISPLAY_NAME)
     app.setApplicationVersion(APP_VERSION)
     app.setWindowIcon(QIcon(resource_path("logo.jpg")))
-    
-    print("Creating AppWindow...", flush=True)
+
     window = AppWindow()
-    print("Showing AppWindow...", flush=True)
     window.show()
-    
+
     sys.exit(app.exec())

@@ -11,6 +11,9 @@ class VisionCore:
         }
         self._template_cache = {}
         self._processed_template_cache = {}
+        # 预分配固定尺寸形态学核，避免每帧重复创建
+        self._kernel_3x3 = np.ones((3, 3), np.uint8)
+        self._kernel_2x3 = np.ones((2, 3), np.uint8)
         
     def update_hsv_config(self, color_name, min_val, max_val):
         """用于GUI动态调节HSV参数"""
@@ -52,7 +55,10 @@ class VisionCore:
         if use_binary:
             _, gray = cv2.threshold(gray, binary_threshold, 255, cv2.THRESH_BINARY)
         elif use_edge:
-            gray = cv2.Canny(gray, 50, 150)
+            v = np.median(gray)
+            lower = int(max(0, (1.0 - 0.33) * v))
+            upper = int(min(255, (1.0 + 0.33) * v))
+            gray = cv2.Canny(gray, lower, upper)
         return gray
 
     def _template_for_match(self, template_path, use_edge=False, use_binary=False, binary_threshold=200):
@@ -97,8 +103,11 @@ class VisionCore:
                 self._processed_template_cache[cache_key] = None
                 return None
             if use_edge:
-                mask = cv2.Canny(gray, 50, 150)
-                mask = cv2.dilate(mask, np.ones((3, 3), np.uint8), iterations=1)
+                v = np.median(gray)
+                lower = int(max(0, (1.0 - 0.33) * v))
+                upper = int(min(255, (1.0 + 0.33) * v))
+                mask = cv2.Canny(gray, lower, upper)
+                mask = cv2.dilate(mask, self._kernel_3x3, iterations=1)
             elif use_binary:
                 threshold = max(1, min(245, int(binary_threshold) - 25))
                 _, mask = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY)
@@ -129,9 +138,7 @@ class VisionCore:
             return [low]
         scales = list(np.linspace(high, low, steps))
         common_scales = (
-            0.50, 0.5625, 0.625, 0.667, 0.75, 0.80, 0.833, 0.875,
-            0.90, 1.0, 1.10, 1.125, 1.20, 1.25, 1.333, 1.50,
-            1.60, 1.667, 1.75, 2.0, 2.25, 2.50, 2.667, 3.0,
+            0.50, 0.625, 0.75, 0.80, 0.90, 1.0, 1.10, 1.25, 1.50, 1.75, 2.0, 3.0,
         )
         if steps >= 7:
             scales.extend(scale for scale in common_scales if low <= scale <= high)
@@ -242,7 +249,7 @@ class VisionCore:
                 center_x = best_loc[0] + w // 2
                 center_y = best_loc[1] + h // 2
                 return (center_x, center_y), best_val
-                
+
             return None, best_val
         except Exception as e:
             print(f"[Vision] Template matching error: {e}")
@@ -529,6 +536,101 @@ class VisionCore:
         upper = np.array([h_high, 255, 255], dtype=np.uint8)
         return cv2.inRange(hsv, lower, upper)
 
+    def _build_debug_info_bar(self, roi_w, roi_h, cursor_x, target_x, confidence, source,
+                              track_score, band_h, fps=None, latency_ms=None,
+                              cursor_missing=False):
+        """构建底部深色信息栏，带颜色编码状态指示。"""
+        info_h = max(44, int(roi_w * 0.11))
+        bar = np.full((info_h, roi_w, 3), (22, 22, 28), dtype=np.uint8)
+        # 顶部分隔线
+        cv2.line(bar, (0, 0), (roi_w - 1, 0), (70, 70, 80), 1)
+
+        # 字号与行距：font scale 取 info_h/40 保证缩放后仍可读
+        fs = max(0.45, info_h / 40.0)
+        thick = 2
+        baseline1 = max(16, int(info_h * 0.40))
+        baseline2 = max(34, int(info_h * 0.84))
+        gap = max(8, int(roi_w * 0.016))
+        x = 6
+
+        # BGR 颜色定义
+        col_yellow = (0, 210, 245)
+        col_green = (30, 200, 70)
+        col_red = (50, 50, 240)
+        col_dim = (140, 140, 150)
+        col_cyan = (200, 190, 50)
+        col_orange = (0, 140, 240)
+
+        if cursor_missing:
+            cv2.putText(bar, "CURSOR MISSING", (x, baseline1),
+                        cv2.FONT_HERSHEY_DUPLEX, fs, col_red, thick, cv2.LINE_AA)
+            return bar
+
+        # 置信度颜色
+        if confidence >= 0.75:
+            col_conf = col_green
+        elif confidence >= 0.50:
+            col_conf = col_yellow
+        else:
+            col_conf = col_red
+
+        # track_score 颜色
+        if track_score >= 0.60:
+            col_track = col_green
+        elif track_score >= 0.35:
+            col_track = col_yellow
+        else:
+            col_track = col_red
+
+        # 检测来源颜色编码
+        source_colors = {
+            "color": col_yellow,
+            "template": col_cyan,
+            "reference-color": col_green,
+            "target-template": col_cyan,
+            "row-single-color": col_green,
+            "row-split-color": col_orange,
+            "split-color": col_orange,
+            "single-color": col_green,
+        }
+        col_src = source_colors.get(source, col_dim)
+
+        def _put(text, color, y=baseline1, advance=True):
+            nonlocal x
+            (tw, _), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_DUPLEX, fs, thick)
+            cv2.putText(bar, text, (x, y), cv2.FONT_HERSHEY_DUPLEX, fs, color, thick, cv2.LINE_AA)
+            if advance:
+                x += tw + gap
+
+        # 第一行：位置 + track
+        _put(f"cur:{cursor_x}", col_yellow)
+        if target_x is not None:
+            _put(f"tgt:{target_x}", col_green)
+            _put(f"trk:{track_score:.2f}", col_track)
+        else:
+            _put("tgt:---", col_dim)
+
+        # 第二行：conf + source + band
+        x = 6
+        _put(f"c:{confidence:.2f}", col_conf, y=baseline2)
+        _put(source, col_src, y=baseline2)
+        if band_h is not None:
+            _put(f"b:{band_h}px", col_dim, y=baseline2)
+
+        # FPS/延迟 右对齐
+        if fps is not None or latency_ms is not None:
+            parts = []
+            if fps is not None:
+                parts.append(f"{fps:.0f}fps")
+            if latency_ms is not None:
+                parts.append(f"{latency_ms:.0f}ms")
+            perf_text = "  ".join(parts)
+            (tw, _), _ = cv2.getTextSize(perf_text, cv2.FONT_HERSHEY_DUPLEX, fs, thick)
+            cv2.putText(bar, perf_text, (max(6, roi_w - tw - 8), baseline2),
+                        cv2.FONT_HERSHEY_DUPLEX, fs, col_dim, thick, cv2.LINE_AA)
+
+        return bar
+
     def analyze_fishing_bar(
         self,
         roi_img,
@@ -542,6 +644,8 @@ class VisionCore:
         target_scale_steps=5,
         allow_target_template=False,
         draw_debug=True,
+        fps=None,
+        latency_ms=None,
     ):
         """
         解析上方耐力条区域。
@@ -565,7 +669,7 @@ class VisionCore:
             initial_reference_mask = self._target_reference_mask(hsv, reference_paths, relaxed=False)
             if initial_reference_mask is not None and cv2.countNonZero(initial_reference_mask) >= max(8, int(roi_w * roi_h * 0.00020)):
                 initial_reference_mask = cv2.morphologyEx(initial_reference_mask, cv2.MORPH_CLOSE, np.ones((3, max(3, int(roi_w * 0.008))), np.uint8))
-                initial_reference_mask = cv2.morphologyEx(initial_reference_mask, cv2.MORPH_OPEN, np.ones((2, 3), np.uint8))
+                initial_reference_mask = cv2.morphologyEx(initial_reference_mask, cv2.MORPH_OPEN, self._kernel_2x3)
                 initial_target = self._select_reference_color_bar_component(
                     initial_reference_mask,
                     {"cy": roi_h * 0.5},
@@ -592,7 +696,7 @@ class VisionCore:
                 if cv2.countNonZero(refined_probe) >= max(8, int(roi_w * roi_h * 0.0004)):
                     green_probe_mask = refined_probe
             green_probe_mask = cv2.morphologyEx(green_probe_mask, cv2.MORPH_CLOSE, np.ones((3, max(7, int(roi_w * 0.025))), np.uint8))
-            green_probe_mask = cv2.morphologyEx(green_probe_mask, cv2.MORPH_OPEN, np.ones((2, 3), np.uint8))
+            green_probe_mask = cv2.morphologyEx(green_probe_mask, cv2.MORPH_OPEN, self._kernel_2x3)
             green_candidates = self._collect_green_bar_candidates(green_probe_mask, roi_w, roi_h)
 
         cursor_mask = self._cursor_reference_mask(hsv, cursor_reference_paths, relaxed=False)
@@ -604,11 +708,11 @@ class VisionCore:
             upper_yellow = np.maximum(upper_yellow, np.array([45, 255, 255], dtype=np.uint8))
             cursor_mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
 
-        cursor_kernel = np.ones((3, 3), np.uint8)
+        cursor_kernel = self._kernel_3x3
         cursor_mask = cv2.morphologyEx(cursor_mask, cv2.MORPH_OPEN, cursor_kernel)
         cursor_mask = cv2.morphologyEx(cursor_mask, cv2.MORPH_CLOSE, cursor_kernel)
 
-        cursor_candidates = self._collect_cursor_components(cursor_mask, roi_w, roi_h)
+        cursor_candidates = self._collect_cursor_components(cursor_mask, roi_w, roi_h, hsv_roi=hsv)
         cursor = self._select_cursor_candidate(cursor_candidates, green_candidates, roi_w, roi_h)
         needs_template = cursor is None or cursor.get("confidence", 0.0) < 0.55 or cursor.get("score", 0.0) < 0.58
         if cursor_template_paths and needs_template:
@@ -624,9 +728,10 @@ class VisionCore:
                 cursor_candidates.append(template_cursor)
                 cursor = self._select_cursor_candidate(cursor_candidates, green_candidates, roi_w, roi_h)
         if cursor is None:
-            if debug_img is not None:
-                cv2.putText(debug_img, "cursor missing", (4, max(12, roi_h - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 255), 1)
-            return None, None, None, debug_img, 0.0
+            debug_meta = {"cursor_x": None, "target_x": None, "confidence": 0.0,
+                          "source": "", "track_score": 0.0, "band_h": None,
+                          "fps": fps, "latency_ms": round(latency_ms, 1) if latency_ms is not None else None}
+            return None, None, None, debug_img, 0.0, debug_meta
 
         band_half = max(6, int(cursor["h"] * 0.85), int(roi_h * 0.22))
         band_y1 = max(0, int(cursor["cy"]) - band_half)
@@ -634,14 +739,14 @@ class VisionCore:
 
         target = None
         if has_reference_color:
-            reference_mask = self._target_reference_mask(hsv, reference_paths, relaxed=False)
+            reference_mask = initial_reference_mask  # 复用经形态学处理后的结果（第574-575行）
             if reference_mask is not None:
                 reference_band_mask = np.zeros_like(reference_mask)
                 reference_band_mask[band_y1:band_y2, :] = reference_mask[band_y1:band_y2, :]
                 if cv2.countNonZero(reference_band_mask[band_y1:band_y2, :]) >= max(8, int(roi_w * roi_h * 0.00020)):
                     ref_close_w = max(3, int(roi_w * 0.008))
                     reference_band_mask = cv2.morphologyEx(reference_band_mask, cv2.MORPH_CLOSE, np.ones((3, ref_close_w), np.uint8))
-                    reference_band_mask = cv2.morphologyEx(reference_band_mask, cv2.MORPH_OPEN, np.ones((2, 3), np.uint8))
+                    reference_band_mask = cv2.morphologyEx(reference_band_mask, cv2.MORPH_OPEN, self._kernel_2x3)
                     target = self._select_horizontal_run_green_bar(reference_band_mask, cursor, roi_w, roi_h, hsv=hsv)
                     if target is None:
                         target = self._select_reference_color_bar_component(reference_band_mask, cursor, roi_w, roi_h, hsv=hsv)
@@ -654,7 +759,7 @@ class VisionCore:
                     if cv2.countNonZero(relaxed_reference_band_mask[band_y1:band_y2, :]) >= max(8, int(roi_w * roi_h * 0.00020)):
                         relaxed_ref_close_w = max(3, int(roi_w * 0.010))
                         relaxed_reference_band_mask = cv2.morphologyEx(relaxed_reference_band_mask, cv2.MORPH_CLOSE, np.ones((3, relaxed_ref_close_w), np.uint8))
-                        relaxed_reference_band_mask = cv2.morphologyEx(relaxed_reference_band_mask, cv2.MORPH_OPEN, np.ones((2, 3), np.uint8))
+                        relaxed_reference_band_mask = cv2.morphologyEx(relaxed_reference_band_mask, cv2.MORPH_OPEN, self._kernel_2x3)
                         target = self._select_reference_color_bar_component(
                             relaxed_reference_band_mask,
                             cursor,
@@ -679,7 +784,7 @@ class VisionCore:
                     band_mask = refined_band_mask
             close_w = max(5, int(roi_w * 0.018))
             band_mask = cv2.morphologyEx(band_mask, cv2.MORPH_CLOSE, np.ones((3, close_w), np.uint8))
-            band_mask = cv2.morphologyEx(band_mask, cv2.MORPH_OPEN, np.ones((2, 3), np.uint8))
+            band_mask = cv2.morphologyEx(band_mask, cv2.MORPH_OPEN, self._kernel_2x3)
 
             target = self._select_green_bar_component(band_mask, roi_w, roi_h, band_y1, band_y2, cursor, hsv=hsv)
             if target is None:
@@ -687,7 +792,7 @@ class VisionCore:
             if target is None:
                 relaxed_close_w = max(5, int(roi_w * 0.020))
                 relaxed_band_mask = cv2.morphologyEx(relaxed_band_mask, cv2.MORPH_CLOSE, np.ones((3, relaxed_close_w), np.uint8))
-                relaxed_band_mask = cv2.morphologyEx(relaxed_band_mask, cv2.MORPH_OPEN, np.ones((2, 3), np.uint8))
+                relaxed_band_mask = cv2.morphologyEx(relaxed_band_mask, cv2.MORPH_OPEN, self._kernel_2x3)
                 target = self._select_green_bar_component(
                     relaxed_band_mask,
                     roi_w,
@@ -727,6 +832,20 @@ class VisionCore:
         if target:
             confidence = min(0.98, cursor["confidence"] * 0.42 + target["confidence"] * 0.58)
 
+        # 构建调试元数据（由GUI层用原生文本控件渲染，不堆叠到图像上）
+        source = cursor.get("source", "color")
+        track_score = target.get("track_score", 0.0) if target else 0.0
+        debug_meta = {
+            "cursor_x": cursor_x,
+            "target_x": target_x,
+            "confidence": round(confidence, 3),
+            "source": source,
+            "track_score": round(track_score, 3),
+            "band_h": band_y2 - band_y1,
+            "fps": fps,
+            "latency_ms": round(latency_ms, 1) if latency_ms is not None else None,
+        }
+
         if debug_img is not None:
             cv2.rectangle(debug_img, (0, band_y1), (roi_w - 1, max(band_y1, band_y2 - 1)), (255, 120, 0), 1)
             cv2.rectangle(
@@ -746,23 +865,17 @@ class VisionCore:
                     1,
                 )
                 cv2.line(debug_img, (target_x, 0), (target_x, roi_h), (0, 255, 0), 2)
-            source = cursor.get("source", "color")
-            if target:
-                track_score = target.get("track_score", 0.0)
-                cv2.putText(debug_img, f"conf {confidence:.2f} {source} rail {track_score:.2f}", (4, max(12, roi_h - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)
-            else:
-                cv2.putText(debug_img, f"conf {confidence:.2f} {source}", (4, max(12, roi_h - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)
 
-        return target_x, cursor_x, target_w, debug_img, confidence
+        return target_x, cursor_x, target_w, debug_img, confidence, debug_meta
 
     def _cursor_template_candidate(self, roi_img, cursor_template_paths, roi_w, roi_h, scale_range=None, scale_steps=5):
         if not cursor_template_paths:
             return None
 
         strategies = (
-            {"name": "cursor-gray-mask", "threshold": 0.66, "use_mask": True, "mask_threshold": 5},
-            {"name": "cursor-binary-mask", "threshold": 0.60, "use_binary": True, "binary_threshold": 150, "use_mask": True},
-            {"name": "cursor-edge", "threshold": 0.52, "use_edge": True},
+            {"name": "cursor-gray-mask", "threshold": 0.70, "use_mask": True, "mask_threshold": 5},
+            {"name": "cursor-binary-mask", "threshold": 0.64, "use_binary": True, "binary_threshold": 150, "use_mask": True},
+            {"name": "cursor-edge", "threshold": 0.56, "use_edge": True},
         )
         loc, conf, matched_path, strategy = self.find_best_template_multi_strategy(
             roi_img,
@@ -897,10 +1010,10 @@ class VisionCore:
             "strategy": strategy,
         }
 
-    def _collect_cursor_components(self, mask, roi_w, roi_h):
+    def _collect_cursor_components(self, mask, roi_w, roi_h, hsv_roi=None):
         count, labels, stats, centroids = cv2.connectedComponentsWithStats(mask, 8)
         candidates = []
-        min_area = max(6, int(roi_w * roi_h * 0.00025))
+        min_area = max(10, int(roi_w * roi_h * 0.0004))
 
         for index in range(1, count):
             x, y, w, h, area = stats[index]
@@ -909,14 +1022,27 @@ class VisionCore:
             if w > max(12, int(h * 0.44)):
                 continue
             aspect = h / max(w, 1)
-            if aspect < 1.05:
+            if aspect < 1.8:
+                continue
+            rect_area = w * h
+            extent = area / max(rect_area, 1)
+            if extent < 0.55:
                 continue
             cx, cy = centroids[index]
             vertical_score = min(1.0, aspect / 3.0)
             height_score = min(1.0, h / max(1, roi_h * 0.55))
             area_score = min(1.0, area / max(1, roi_w * roi_h * 0.012))
             center_score = 1.0 - min(1.0, abs(cy - roi_h * 0.5) / max(1.0, roi_h * 0.65))
-            confidence = max(0.0, min(0.98, vertical_score * 0.34 + height_score * 0.30 + area_score * 0.20 + center_score * 0.16))
+            color_concentration = 0.5
+            if hsv_roi is not None:
+                region_mask = (labels[y:y+h, x:x+w] == index)
+                region_hsv = hsv_roi[y:y+h, x:x+w][region_mask]
+                if len(region_hsv) > 10:
+                    h_std = float(np.std(region_hsv[:, 0].astype(float)))
+                    color_concentration = max(0.0, min(1.0, 1.0 - (h_std / 20.0)))
+            confidence = max(0.0, min(0.98,
+                vertical_score * 0.28 + height_score * 0.25 +
+                area_score * 0.15 + center_score * 0.12 + color_concentration * 0.20))
             score = confidence + area_score * 0.15
             candidates.append({
                 "x": int(x),
@@ -927,6 +1053,7 @@ class VisionCore:
                 "cx": float(cx),
                 "cy": float(cy),
                 "confidence": confidence,
+                "color_concentration": color_concentration,
                 "score": score,
                 "source": "color",
             })
@@ -1003,7 +1130,8 @@ class VisionCore:
 
             template_bonus = 0.18 if candidate.get("source") == "template" else 0.0
             confidence = float(candidate.get("confidence", 0.0))
-            score = confidence * 0.42 + band_score * 0.24 + center_score * 0.12 + slender_score * 0.12 + edge_score * 0.10 + template_bonus
+            color_c = float(candidate.get("color_concentration", 0.5))
+            score = confidence * 0.30 + color_c * 0.16 + band_score * 0.22 + center_score * 0.10 + slender_score * 0.10 + edge_score * 0.10 + template_bonus
             if candidate.get("source") == "template" and confidence >= 0.78:
                 score += 0.06
             candidate["score"] = max(0.0, min(1.20, score))
@@ -1030,7 +1158,9 @@ class VisionCore:
 
         value = hsv[:, :, 2]
         saturation = hsv[:, :, 1]
-        dark_mask = (value < 105) | ((value < 140) & (saturation < 130))
+        scene_brightness = float(np.median(value))
+        dark_thresh = min(105, max(55, scene_brightness * 0.75))
+        dark_mask = (value < dark_thresh) | ((value < dark_thresh + 35) & (saturation < 130))
 
         ratios = []
         for y1, y2 in ((top_y1, top_y2), (bottom_y1, bottom_y2)):
@@ -1068,7 +1198,7 @@ class VisionCore:
         hue = patch[:, :, 0]
         sat = patch[:, :, 1]
         val = patch[:, :, 2]
-        cyan_green = (hue >= 48) & (hue <= 102) & (sat >= 135) & (val >= 96)
+        cyan_green = (hue >= 48) & (hue <= 102) & (sat >= 120) & (val >= 96)
         bright_core = (hue >= 56) & (hue <= 96) & (sat >= 155) & (val >= 108)
         cyan_ratio = float(np.count_nonzero(cyan_green)) / float(cyan_green.size)
         core_ratio = float(np.count_nonzero(bright_core)) / float(bright_core.size)
@@ -1301,7 +1431,7 @@ class VisionCore:
             sat = hsv[:, :, 1]
             val = hsv[:, :, 2]
             target_like = (
-                ((hue >= 48) & (hue <= 102) & (sat >= 135) & (val >= 96))
+                ((hue >= 48) & (hue <= 102) & (sat >= 120) & (val >= 96))
                 | ((hue >= 56) & (hue <= 96) & (sat >= 155) & (val >= 108))
             )
             strict_mask = np.zeros_like(mask)
@@ -1309,7 +1439,7 @@ class VisionCore:
             if cv2.countNonZero(strict_mask) >= max(8, int(roi_w * roi_h * 0.00025)):
                 close_w = max(5, int(roi_w * (0.010 if relaxed else 0.008)))
                 work_mask = cv2.morphologyEx(strict_mask, cv2.MORPH_CLOSE, np.ones((3, close_w), np.uint8))
-                work_mask = cv2.morphologyEx(work_mask, cv2.MORPH_OPEN, np.ones((2, 3), np.uint8))
+                work_mask = cv2.morphologyEx(work_mask, cv2.MORPH_OPEN, self._kernel_2x3)
 
         count, labels, stats, centroids = cv2.connectedComponentsWithStats(work_mask, 8)
         pieces = []
