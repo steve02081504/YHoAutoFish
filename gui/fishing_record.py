@@ -55,28 +55,20 @@ class StatCard(DashboardPanel):
         layout.setSpacing(8)
 
         title_label = QLabel(title)
-        title_label.setStyleSheet(
-            f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 13px; font-weight: 700;"
-        )
+        title_label.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 13px; font-weight: 700;")
         layout.addWidget(title_label)
 
         self.value_label = QLabel("--")
-        self.value_label.setStyleSheet(
-            f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 29px; font-weight: 900;"
-        )
+        self.value_label.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 29px; font-weight: 900;")
         layout.addWidget(self.value_label)
 
         self.note_label = QLabel("")
-        self.note_label.setStyleSheet(
-            f"background: transparent; border: none; color: {APP_COLORS['text_soft']}; font-size: 12px;"
-        )
+        self.note_label.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text_soft']}; font-size: 12px;")
         layout.addWidget(self.note_label)
 
         accent_bar = QFrame()
         accent_bar.setFixedHeight(4)
-        accent_bar.setStyleSheet(
-            f"background-color: {accent}; border: none; border-radius: 2px;"
-        )
+        accent_bar.setStyleSheet(f"background-color: {accent}; border: none; border-radius: 2px;")
         layout.addWidget(accent_bar)
 
     def set_data(self, value, note=""):
@@ -166,11 +158,7 @@ class InsightChart(QWidget):
         self.update()
 
     def set_data(self, distribution, trend_points, trend_granularity="day"):
-        if (
-            self.distribution == (distribution or {})
-            and self.trend_points == (trend_points or [])
-            and self.trend_granularity == trend_granularity
-        ):
+        if self.distribution == (distribution or {}) and self.trend_points == (trend_points or []) and self.trend_granularity == trend_granularity:
             return
         self.distribution = distribution or {}
         self.trend_points = trend_points or []
@@ -271,11 +259,7 @@ class InsightChart(QWidget):
 
     def _distribution_items(self):
         total = sum(self.distribution.values())
-        return [
-            (rarity, self.distribution[rarity], total)
-            for rarity in RARITY_ORDER
-            if self.distribution.get(rarity, 0)
-        ]
+        return [(rarity, self.distribution[rarity], total) for rarity in RARITY_ORDER if self.distribution.get(rarity, 0)]
 
     def _draw_bar(self, painter, rect):
         items = self._distribution_items()
@@ -1081,7 +1065,7 @@ class SummaryChoiceDialog(QDialog):
             f"""
             QPushButton {{
                 background-color: rgba(15, 31, 50, 0.84);
-                color: {APP_COLORS['text']};
+                color: {APP_COLORS["text"]};
                 border: 1px solid rgba(99, 228, 228, 0.24);
                 border-radius: 24px;
                 padding: 18px;
@@ -1254,7 +1238,7 @@ class SummaryDialog(QDialog):
                 background-color: rgba(8, 19, 31, 0.88);
                 border: 1px solid rgba(99, 228, 228, 0.26);
                 border-radius: 22px;
-                color: {APP_COLORS['text']};
+                color: {APP_COLORS["text"]};
                 font-size: 14px;
                 font-weight: 850;
                 padding: 18px;
@@ -1374,12 +1358,12 @@ class SummaryDialog(QDialog):
                 }}
                 QFrame#summaryFishCard:hover {{
                     background-color: rgba(10, 24, 38, 0.98);
-                    border: 1px solid {meta['color']};
+                    border: 1px solid {meta["color"]};
                 }}
                 QLabel {{
                     background: transparent;
                     border: none;
-                    color: {APP_COLORS['text_dim']};
+                    color: {APP_COLORS["text_dim"]};
                 }}
                 """
             )
@@ -1390,9 +1374,7 @@ class SummaryDialog(QDialog):
             image_label = QLabel()
             image_label.setFixedSize(98, 58)
             image_label.setAlignment(Qt.AlignCenter)
-            image_label.setStyleSheet(
-                f"background-color: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06); border-radius: 13px; color: {APP_COLORS['text_dim']}; font-size: 11px; font-weight: 900;"
-            )
+            image_label.setStyleSheet(f"background-color: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06); border-radius: 13px; color: {APP_COLORS['text_dim']}; font-size: 11px; font-weight: 900;")
             if image_path:
                 pixmap = rounded_pixmap(image_path, 96, 56, 12, keep_full=True)
                 if not pixmap.isNull():
@@ -1441,11 +1423,7 @@ class SummaryDialog(QDialog):
                 rare_lines.append(f"{meta['label']} {rarity_counter[rarity]} 条")
         top_species = "、".join(f"{name} x{count}" for name, count in species_counter.most_common(6))
         scope = "完整累计" if self.mode == "full" else "本阶段新增"
-        tail = (
-            "完整总结统计当前本地保存的全部历史记录，不会改变阶段总结进度。"
-            if self.mode == "full"
-            else "阶段总结完成后会记录本次进度，下次阶段总结将只统计之后新增的数据。"
-        )
+        tail = "完整总结统计当前本地保存的全部历史记录，不会改变阶段总结进度。" if self.mode == "full" else "阶段总结完成后会记录本次进度，下次阶段总结将只统计之后新增的数据。"
         return (
             f"{scope}钓鱼记录 {total} 条，累计重量 {total_weight} g。\n"
             f"出现鱼种 {len(species_counter)} 种，代表收获为：{top_species or '暂无'}。\n"
@@ -1465,25 +1443,16 @@ class SummaryDialog(QDialog):
         rarity_counter = self.stats["rarity_counter"]
         max_record = self.stats["max_record"]
         max_name = html.escape(max_record.get("fish_name", "未知鱼类"))
-        top_species = "、".join(
-            f"<span style='color:{APP_COLORS['accent_soft']}; font-weight:900;'>{html.escape(name)}</span> x{count}"
-            for name, count in species_counter.most_common(6)
-        )
+        top_species = "、".join(f"<span style='color:{APP_COLORS['accent_soft']}; font-weight:900;'>{html.escape(name)}</span> x{count}" for name, count in species_counter.most_common(6))
         rare_chips = []
         for rarity in RARITY_ORDER:
             count = rarity_counter.get(rarity, 0)
             if not count:
                 continue
             meta = RARITY_META.get(rarity, {"label": rarity, "color": APP_COLORS["text_dim"]})
-            rare_chips.append(
-                f"<span style='color:{meta['color']}; font-weight:900;'>{html.escape(meta['label'])} {count} 条</span>"
-            )
+            rare_chips.append(f"<span style='color:{meta['color']}; font-weight:900;'>{html.escape(meta['label'])} {count} 条</span>")
         scope = "完整累计" if self.mode == "full" else "本阶段新增"
-        tail = (
-            "完整总结不会改变阶段总结进度。"
-            if self.mode == "full"
-            else "阶段总结完成后会记录本次进度。"
-        )
+        tail = "完整总结不会改变阶段总结进度。" if self.mode == "full" else "阶段总结完成后会记录本次进度。"
         return (
             "<div style='line-height:1.75;'>"
             f"<p><span style='color:{APP_COLORS['accent_soft']}; font-weight:950;'>{scope}</span>"
@@ -1522,7 +1491,7 @@ class SummaryDialog(QDialog):
             return
         step = 3 if self.full_text[self.cursor] != "\n" else 1
         self.cursor = min(len(self.full_text), self.cursor + step)
-        self.text_label.setText(self.full_text[:self.cursor])
+        self.text_label.setText(self.full_text[: self.cursor])
         self._spawn_type_particles()
         if self.cursor >= len(self.full_text):
             self.type_timer.stop()
@@ -1712,7 +1681,7 @@ class FishingRecordWidget(QWidget):
             f"""
             QPushButton {{
                 background-color: rgba(29, 208, 214, 0.18);
-                color: {APP_COLORS['text']};
+                color: {APP_COLORS["text"]};
                 border: 1px solid rgba(99, 228, 228, 0.46);
                 border-radius: 17px;
                 padding: 9px 18px;
@@ -1875,7 +1844,7 @@ class FishingRecordWidget(QWidget):
             f"""
             QLabel {{
                 background-color: rgba(255, 255, 255, 0.04);
-                color: {APP_COLORS['text_dim']};
+                color: {APP_COLORS["text_dim"]};
                 border: 1px solid rgba(111, 145, 182, 0.18);
                 border-radius: 16px;
                 padding: 8px 14px;
@@ -1918,9 +1887,7 @@ class FishingRecordWidget(QWidget):
 
         self.empty_tip = QLabel("当前筛选条件下暂无记录")
         self.empty_tip.setAlignment(Qt.AlignCenter)
-        self.empty_tip.setStyleSheet(
-            f"background: transparent; border: none; color: {APP_COLORS['text_soft']}; font-size: 13px;"
-        )
+        self.empty_tip.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text_soft']}; font-size: 13px;")
         record_body_layout.addWidget(self.empty_tip, 1)
 
         list_layout.addWidget(self.record_body, 1)
@@ -2086,15 +2053,8 @@ class FishingRecordWidget(QWidget):
         limit = 24 if trend_granularity == "hour" else 14
         trend_points = [(key, trend_source[key]) for key in sorted(trend_source.keys())[-limit:]]
         visible_trend_keys = {key for key, _ in trend_points}
-        self._current_rarity_names = {
-            key: [name for name, _count in Counter(value).most_common(18)]
-            for key, value in rarity_names.items()
-        }
-        self._current_trend_events = {
-            key: value[-24:]
-            for key, value in trend_events.items()
-            if key in visible_trend_keys
-        }
+        self._current_rarity_names = {key: [name for name, _count in Counter(value).most_common(18)] for key, value in rarity_names.items()}
+        self._current_trend_events = {key: value[-24:] for key, value in trend_events.items() if key in visible_trend_keys}
 
         self.chart.set_data(distribution, trend_points, trend_granularity)
 

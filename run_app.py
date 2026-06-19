@@ -20,18 +20,18 @@ from core.paths import resource_path
 from core.version import APP_DISPLAY_NAME, APP_NAME, APP_VERSION
 from gui.app import AppWindow
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     print("Starting app...")
     app = QApplication(sys.argv)
-    
+
     app.setApplicationName(APP_NAME)
     app.setApplicationDisplayName(APP_DISPLAY_NAME)
     app.setApplicationVersion(APP_VERSION)
     app.setWindowIcon(QIcon(resource_path("logo.jpg")))
-    
+
     window = AppWindow()
     window.show()
-    
+
     try:
         sys.exit(app.exec())
     except KeyboardInterrupt:
@@ -39,6 +39,6 @@ if __name__ == '__main__':
     except Exception as e:
         print(f"Error: {e}")
     finally:
-        if hasattr(window, 'sm'):
+        if hasattr(window, "sm"):
             window.sm.stop()
         os._exit(0)

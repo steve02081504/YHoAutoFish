@@ -4,11 +4,12 @@ import win32api
 import ctypes
 from core.dpi import dpi_scale_for_window
 
+
 class WindowManager:
     def __init__(self, process_name="HTGame.exe"):
         self.process_name = process_name.lower()
         self.hwnd = None
-        
+
     def _enum_windows_callback(self, hwnd, hwnds):
         """枚举窗口的回调函数，寻找符合要求的游戏窗口"""
         if win32gui.IsWindowVisible(hwnd) and win32gui.GetWindowText(hwnd):
@@ -17,7 +18,7 @@ class WindowManager:
                 # 首先尝试通过进程模块名匹配 (更严谨)
                 # 使用较低权限 PROCESS_QUERY_LIMITED_INFORMATION 替代 PROCESS_QUERY_INFORMATION
                 # 以防游戏自带保护机制拒绝访问 (Access Denied)
-                process_handle = win32api.OpenProcess(0x1000, False, pid) 
+                process_handle = win32api.OpenProcess(0x1000, False, pid)
                 if process_handle:
                     exe_path = win32process.GetModuleFileNameEx(process_handle, 0)
                     win32api.CloseHandle(process_handle)
@@ -26,17 +27,17 @@ class WindowManager:
                         return True
             except Exception as e:
                 pass
-                
+
             # 如果上面因为权限问题获取不到进程名，退而求其次通过窗口类名或标题匹配
             # 《异环》通常使用虚幻引擎 (UnrealEngine) 开发，类名可能是 UnrealWindow
             # 标题一般就是 "异环"
             window_title = win32gui.GetWindowText(hwnd)
             class_name = win32gui.GetClassName(hwnd)
-            
+
             # 兼容标题名为 "异环" 或类名为 "UnrealWindow" 的可见窗口
             if window_title == "异环" or class_name == "UnrealWindow":
                 hwnds.append(hwnd)
-                
+
         return True
 
     def find_window(self):
@@ -78,20 +79,20 @@ class WindowManager:
         """
         if not self.is_window_visible_and_restored():
             return None
-        
+
         try:
             # 获取客户区大小 (0, 0, width, height)
             client_rect = win32gui.GetClientRect(self.hwnd)
             width = client_rect[2] - client_rect[0]
             height = client_rect[3] - client_rect[1]
-            
+
             # 将客户区左上角坐标(0,0)转换为屏幕绝对坐标
             point = win32gui.ClientToScreen(self.hwnd, (0, 0))
             left, top = point[0], point[1]
-            
+
             if width <= 0 or height <= 0:
                 return None
-            
+
             return (left, top, width, height)
         except Exception as e:
             print(f"[WindowManager] 获取客户区坐标失败: {e}")
@@ -115,7 +116,7 @@ class WindowManager:
             try:
                 # 若窗口最小化，先恢复
                 if win32gui.IsIconic(self.hwnd):
-                    win32gui.ShowWindow(self.hwnd, 9) # SW_RESTORE
+                    win32gui.ShowWindow(self.hwnd, 9)  # SW_RESTORE
                 win32gui.SetForegroundWindow(self.hwnd)
                 return True
             except Exception:

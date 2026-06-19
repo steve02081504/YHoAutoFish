@@ -1,11 +1,12 @@
 import time
 
+
 class PIDController:
     def __init__(self, kp, ki, kd, output_limits=(None, None)):
         self.kp = kp  # 比例系数：反应当前的差距
         self.ki = ki  # 积分系数：消除长期静态误差
         self.kd = kd  # 微分系数：预测未来趋势，防止过冲（刹车）
-        
+
         self.output_limits = output_limits
         self.reset()
 

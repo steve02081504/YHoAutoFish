@@ -8,6 +8,7 @@ import re
 import shutil
 import traceback
 from pathlib import Path
+
 try:
     from importlib import metadata
 except ImportError:
@@ -31,6 +32,7 @@ from core._sm_ocr import SettlementOCR
 from core._sm_cast_detector import CastDetector
 from core._sm_result_detector import ResultDetector
 
+
 class StateMachine:
     STATE_IDLE = 0
     STATE_WAITING = 1
@@ -40,24 +42,24 @@ class StateMachine:
     STATE_PAUSED = 5
     STATE_RECOVERING = 6
     STATE_SELLING_CATCHES = 7
-    
+
     def __init__(self, log_queue=None, debug_queue=None, config=None):
         self.log_queue = log_queue
         self.debug_queue = debug_queue
-        
+
         self.wm = WindowManager()
-        self.sc = None 
+        self.sc = None
         self.ctrl = Controller()
         self.user_activity = UserActivityMonitor()
         self._user_takeover_exclude_rects = []
         self._input_lock = threading.RLock()
         self.vis = VisionCore()
         self.record_mgr = RecordManager()
-        
+
         self.is_running = False
         self.current_state = self.STATE_IDLE
         self.fishing_start_time = 0
-        self.fishing_timeout = 180 # 3分钟超时防卡死
+        self.fishing_timeout = 180  # 3分钟超时防卡死
         self.fish_count = 0
         self._auto_sell_session_catch_count = 0
         self._auto_sell_pending = False
@@ -77,11 +79,11 @@ class StateMachine:
         self.total_runtime = 0
         self.start_timestamp = 0
         self._stop_requested = False
-        
+
         # 参数配置 (后续可由 GUI 更新)
         self.config = config or {
-            "t_hold": 5,        # 安全区内重新触发按键的阈值
-            "t_deadzone": 1,    # 追赶触发死区
+            "t_hold": 5,  # 安全区内重新触发按键的阈值
+            "t_deadzone": 1,  # 追赶触发死区
             "tracking_strength": 180,
             "debug_mode": False,
             "cast_animation_delay": 2,
@@ -114,7 +116,7 @@ class StateMachine:
         self.ocr_module = SettlementOCR(self)
         self.cast_det = CastDetector(self)
         self.result_det = ResultDetector(self)
-        
+
     def _log(self, msg):
         """线程安全的日志发送"""
         if self.log_queue is not None:
@@ -141,7 +143,7 @@ class StateMachine:
                 return False
             self._note_program_input((key,), duration=float(duration) + 0.45)
             self.ctrl.key_tap(key, duration=duration)
-            if key == 'esc':
+            if key == "esc":
                 self._last_esc_time = time.time()
             return True
 
@@ -221,7 +223,8 @@ class StateMachine:
 
     def start(self):
         """启动状态机"""
-        if self.is_running: return
+        if self.is_running:
+            return
         self._stop_requested = False
         self.is_running = True
         self.current_state = self.STATE_IDLE
@@ -230,28 +233,29 @@ class StateMachine:
         self.user_activity.reset()
         self.start_timestamp = time.time()
         self._log("钓鱼脚本启动中，正在寻找游戏窗口...")
-        
+
         # 在独立线程运行主循环
         t = threading.Thread(target=self._run_loop, daemon=True)
         t.start()
 
     def stop(self):
         """停止状态机"""
-        if not self.is_running: return
+        if not self.is_running:
+            return
         with self._input_lock:
             self._stop_requested = True
             self.is_running = False
             self.ctrl.release_all()
         self._set_auto_sell_capture_hidden(False)
         self._log("[系统] 收到停止指令。")
-        
+
         # 记录本次运行时长
         if self.start_timestamp > 0:
             self._record_runtime_for_current_run()
-            
+
         self.ctrl.release_all()
         # 释放系统绘图句柄，防止二次启动时抛出 BitBlt 和 SelectObject 异常
-        if hasattr(self, 'sc') and self.sc:
+        if hasattr(self, "sc") and self.sc:
             self.sc.close()
         self._log("钓鱼脚本已停止。")
         # 通知 UI 更新
@@ -306,9 +310,11 @@ class StateMachine:
             pid=self.pid,
         )
         self.fishing_start_time = self.round.fishing_start_time
+
     def _prepare_fishing_round_state(self, start_time=None):
         self.round.prepare_fishing(pid=self.pid, start_time=start_time)
         self.fishing_start_time = self.round.fishing_start_time
+
     def _wait_after_cast(self, rect, total_delay):
         return not self._sleep_interruptible(max(0.0, float(total_delay)), step=0.04)
 
@@ -334,6 +340,7 @@ class StateMachine:
             return
         try:
             import cv2 as _cv2
+
             frame = _cv2.zeros((60, 300, 3), dtype="uint8")
             _cv2.putText(frame, text, (10, 40), _cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 255), 2)
             if self.debug_queue.qsize() < 2:
@@ -357,6 +364,7 @@ class StateMachine:
 
     def prepare_recognition_modules(self):
         """预热所有识别模块：OCR、视觉模板、HSV 色彩轮廓、形态学管线。"""
+
         def _report(msg):
             self._log(f"[预热] {msg}")
 
@@ -491,6 +499,7 @@ class StateMachine:
     def _preheat_analyze_fishing_bar(self):
         """用合成小图像调用一次 analyze_fishing_bar，预热所有内部处理管线。"""
         import numpy as _np
+
         dummy_img = _np.zeros((20, 200, 3), dtype=_np.uint8)
         cursor_paths = self.tpl.cursor_templates()
         target_paths = self.tpl.target_bar_templates()
@@ -508,13 +517,13 @@ class StateMachine:
     def _run_loop(self):
         # 确保在当前线程中实例化 ScreenCapture
         self.sc = ScreenCapture()
-        
+
         # 初始化与绑定窗口
         if not self.wm.find_window():
             self._log("错误: 未找到游戏进程 HTGame.exe。请确保游戏正在运行。")
             self.stop()
             return
-            
+
         initial_rect = self.wm.get_client_rect()
         dpi_scale = self.wm.get_dpi_scale()
         if initial_rect:
@@ -522,11 +531,11 @@ class StateMachine:
         else:
             self._log(f"成功绑定游戏窗口。DPI倍率: {dpi_scale:.2f}")
         self.wm.set_foreground()
-        if not self._sleep_interruptible(1): # 等待窗口置顶完成
+        if not self._sleep_interruptible(1):  # 等待窗口置顶完成
             self.sc.close()
             return
         self.user_activity.reset()
-        
+
         # ROI 定义 (相对于客户区宽高)
         # 缩小寻找 F 键的范围，只截取屏幕真正的右下角边缘，避免把中间的发光背景截进去
         ROI_F_BTN = (0.75, 0.75, 0.25, 0.25)
@@ -535,9 +544,9 @@ class StateMachine:
         # 横向占比是30%到70% (X: 0.3, Width: 0.4)
         # 竖向占比是从6.21%到7.68% (Y: 0.0621, Height: 0.0147)
         ROI_FISHING_BAR = (0.3, 0.0621, 0.4, 0.0147)
-        
+
         ROI_CENTER_TEXT = (0.2, 0.2, 0.6, 0.5)
-        
+
         # DEBUG 计数器，防止写爆硬盘
         debug_save_count = 0
 
@@ -546,6 +555,7 @@ class StateMachine:
             if not self.wm.is_foreground():
                 # 检查当前焦点是否是被我们自己的 Debug 窗口抢走了
                 import win32gui
+
                 fg_hwnd = win32gui.GetForegroundWindow()
                 if win32gui.GetWindowText(fg_hwnd) == "Fishing Bar Tracker (Debug)":
                     # 如果是被 Debug 窗口抢走的，不要暂停按键，尝试切回去
@@ -567,7 +577,7 @@ class StateMachine:
 
             if self._check_user_takeover(game_rect=rect):
                 break
-                
+
             # 3. 状态分发
             if self.current_state == self.STATE_IDLE:
                 self._handle_idle(rect, ROI_F_BTN)
@@ -583,11 +593,11 @@ class StateMachine:
                 self._handle_recovering(rect)
             elif self.current_state == self.STATE_SELLING_CATCHES:
                 self._handle_auto_sell(rect)
-                
+
             # 控制基础循环帧率
             if not self._sleep_interruptible(0.01, step=0.01):
                 break
-            
+
         self._set_auto_sell_capture_hidden(False)
         self.sc.close()
 
@@ -595,9 +605,10 @@ class StateMachine:
         if self._should_stop():
             return
         self._log("[待机] 正在检测右下角抛竿图标...")
-            
+
         # DEBUG 计数器
-        if not hasattr(self, '_debug_count'): self._debug_count = 0
+        if not hasattr(self, "_debug_count"):
+            self._debug_count = 0
         self._debug_count += 1
 
         ready_info = self.cast_det.detect_ready_to_cast(rect, allow_heavy=(self._debug_count % 6 == 0))
@@ -607,7 +618,7 @@ class StateMachine:
         if ready_info and ready_info.get("blocking_result"):
             if self.cast_det.handle_ready_blocking_result(rect, ready_info, "待机"):
                 return
-        
+
         if ready_info and ready_info.get("location"):
             if getattr(self, "_auto_sell_pending", False) and self._auto_sell_threshold() > 0:
                 strict_ready = self.cast_det.detect_ready_to_cast(rect, allow_heavy=False, require_initial_controls=True)
@@ -666,14 +677,15 @@ class StateMachine:
             return
         if self._should_stop():
             return
-        if getattr(self.round, 'waiting_start_time', 0) == 0:
+        if getattr(self.round, "waiting_start_time", 0) == 0:
             self.round.waiting_start_time = time.time()
-        if getattr(self.round, 'last_cast_time', 0) == 0:
+        if getattr(self.round, "last_cast_time", 0) == 0:
             self.round.last_cast_time = self.round.waiting_start_time
 
         now = time.time()
         text_img = self.sc.capture_relative(rect, *roi)
-        if text_img is None: return
+        if text_img is None:
+            return
 
         self.pid.reset()
 
@@ -686,11 +698,11 @@ class StateMachine:
             scale_range=self.tpl.scale_range(rect, 0.62, 1.55),
             scale_steps=11,
         )
-        
+
         if loc:
             matched_name = Path(matched_path).name if matched_path else "未知模板"
             self._log(f"[等待] 识别到上钩提示 (置信度: {conf:.2f}，模板: {matched_name})，迅速按F！")
-            if not self._tap_key_if_running('F'):
+            if not self._tap_key_if_running("F"):
                 return
             self._prepare_fishing_round_state(time.time())
             self.round.waiting_start_time = 0
@@ -709,7 +721,7 @@ class StateMachine:
             return
 
         cast_retry_delay = max(6.0, min(float(self.config.get("cast_retry_delay", 8)), 30.0))
-        if now - self.round.last_cast_time >= cast_retry_delay and now - getattr(self.round, 'waiting_ready_recheck_last', 0) >= 1.0:
+        if now - self.round.last_cast_time >= cast_retry_delay and now - getattr(self.round, "waiting_ready_recheck_last", 0) >= 1.0:
             self.round.waiting_ready_recheck_last = now
             ready_info = self.cast_det.detect_ready_to_cast(
                 rect,
@@ -721,7 +733,7 @@ class StateMachine:
                 if self.cast_det.handle_ready_blocking_result(rect, ready_info, "等待"):
                     return
             if ready_info and ready_info.get("location"):
-                retry_count = int(getattr(self.round, 'waiting_recast_count', 0))
+                retry_count = int(getattr(self.round, "waiting_recast_count", 0))
                 max_retries = 2
                 if retry_count < max_retries:
                     self.round.waiting_recast_count = retry_count + 1
@@ -734,14 +746,13 @@ class StateMachine:
                 self._enter_recovering("多次重发 F 后仍未进入抛竿流程", record_empty=False, press_esc=False)
                 return
 
-
     def _handle_fishing(self, rect, roi):
         if self._should_stop():
             return
         # 记录进入溜鱼状态的时间，用于防卡死
-        if getattr(self.round, 'fishing_start_time', 0) == 0:
+        if getattr(self.round, "fishing_start_time", 0) == 0:
             self._prepare_fishing_round_state(time.time())
-            
+
         elapsed = time.time() - self.round.fishing_start_time
         if elapsed > self.fishing_timeout:
             self._log("[防卡死] 溜鱼超时，强制结束当前回合。")
@@ -750,8 +761,8 @@ class StateMachine:
             self.current_state = self.STATE_RESULT
             return
 
-        recent_bar_seen = getattr(self.round, 'last_bar_seen_time', 0) and (time.time() - getattr(self.round, 'last_bar_seen_time', 0) <= 0.35)
-        if elapsed >= 1.0 and not getattr(self.round, 'confirmed_fishing_bar', False) and not recent_bar_seen and self.result_det.check_terminal_result_before_bar(rect, elapsed):
+        recent_bar_seen = getattr(self.round, "last_bar_seen_time", 0) and (time.time() - getattr(self.round, "last_bar_seen_time", 0) <= 0.35)
+        if elapsed >= 1.0 and not getattr(self.round, "confirmed_fishing_bar", False) and not recent_bar_seen and self.result_det.check_terminal_result_before_bar(rect, elapsed):
             return
 
         det_result = self.bar_detector.select_fishing_bar_detection(rect, roi)
@@ -761,18 +772,15 @@ class StateMachine:
         # 性能优化：限制 Debug 图像的发送频率（一秒最多 10 帧），防止撑爆队列导致主线程阻塞
         if self.config.get("debug_mode", False) and debug_img is not None:
             now = time.time()
-            if getattr(self, '_last_debug_time', 0) == 0 or (now - self._last_debug_time) >= 0.10:
+            if getattr(self, "_last_debug_time", 0) == 0 or (now - self._last_debug_time) >= 0.10:
                 if self.debug_queue is not None and self.debug_queue.qsize() < 2:
                     self.debug_queue.put(debug_img)
                 self._last_debug_time = now
 
         # 判断是否结束 (无论是成功还是鱼儿溜走，耐力条都会消失)
         if target_x is None or cursor_x is None:
-            active_fishing = (
-                getattr(self.round, 'fishing_control_started', False)
-                and getattr(self.round, 'confirmed_fishing_bar', False)
-            )
-            if active_fishing and getattr(self.round, 'missing_start_time', 0) == 0:
+            active_fishing = getattr(self.round, "fishing_control_started", False) and getattr(self.round, "confirmed_fishing_bar", False)
+            if active_fishing and getattr(self.round, "missing_start_time", 0) == 0:
                 self.round.missing_start_time = time.time()
                 self.round.result_quick_check_last = 0
                 self.round.result_full_check_last = self.round.missing_start_time
@@ -796,13 +804,13 @@ class StateMachine:
                     self._enter_result_from_fishing_anomaly("溜鱼超时（保持控制期间）")
                 return
 
-            if not getattr(self.round, 'fishing_control_started', False):
+            if not getattr(self.round, "fishing_control_started", False):
                 self.ctrl.release_all()
                 self.round.fish_control_direction = 0
                 self.round.fish_control_min_hold_until = 0
                 self.bar_detector.reset_detection_recovery_state()
 
-                last_seen_time = getattr(self.round, 'last_bar_seen_time', 0)
+                last_seen_time = getattr(self.round, "last_bar_seen_time", 0)
                 if last_seen_time and time.time() - last_seen_time > 0.55:
                     self.round.bar_seen_streak = 0
                     self.round.seen_fishing_bar = False
@@ -817,13 +825,13 @@ class StateMachine:
                     self._enter_result_from_fishing_anomaly(f"上钩后 {pre_control_timeout:.0f} 秒仍未进入有效溜鱼控制")
                 return
 
-            if not getattr(self.round, 'confirmed_fishing_bar', False):
+            if not getattr(self.round, "confirmed_fishing_bar", False):
                 self.ctrl.release_all()
                 self.round.fish_control_direction = 0
                 self.round.fish_control_min_hold_until = 0
                 self.bar_detector.reset_detection_recovery_state()
 
-                last_seen_time = getattr(self.round, 'last_bar_seen_time', 0)
+                last_seen_time = getattr(self.round, "last_bar_seen_time", 0)
                 if last_seen_time and time.time() - last_seen_time > 0.55:
                     self.round.bar_seen_streak = 0
                     self.round.seen_fishing_bar = False
@@ -841,7 +849,7 @@ class StateMachine:
             self.bar_detector.apply_detection_recovery(rect, roi, missing_elapsed)
             # 最小溜鱼时间守卫：溜鱼开始后 3 秒内不退出 FISHING 状态
             # 防止特效/粒子短暂遮挡耐力条导致误判"鱼溜走了"
-            fishing_elapsed = time.time() - getattr(self.round, 'fishing_start_time', 0)
+            fishing_elapsed = time.time() - getattr(self.round, "fishing_start_time", 0)
             if fishing_elapsed < 3.0:
                 return
             if missing_elapsed >= 0.50 and self.result_det.check_result_signals_after_bar_missing(rect, missing_elapsed):
@@ -854,7 +862,7 @@ class StateMachine:
             if missing_elapsed > missing_timeout:
                 self.bar_detector.enter_result_after_bar_missing()
             return
-        
+
         # 识别到了，重置丢失计时器，并标记已经看到过耐力条
         self.round.missing_start_time = 0
         self.round.capture_missing_start_time = 0
@@ -864,16 +872,16 @@ class StateMachine:
         self.result_det.clear_result_ready_candidate()
 
         now = time.time()
-        last_seen_time = getattr(self.round, 'last_bar_seen_time', 0)
+        last_seen_time = getattr(self.round, "last_bar_seen_time", 0)
         if not is_stale:
             if last_seen_time and now - last_seen_time <= 0.55:
-                self.round.bar_seen_streak = int(getattr(self.round, 'bar_seen_streak', 0)) + 1
+                self.round.bar_seen_streak = int(getattr(self.round, "bar_seen_streak", 0)) + 1
             else:
                 self.round.bar_seen_streak = 1
                 self.round.bar_first_seen_time = now
             self.round.last_bar_seen_time = now
         self.round.seen_fishing_bar = True
-        if not getattr(self.round, 'confirmed_fishing_bar', False) and self.round.bar_seen_streak >= 2:
+        if not getattr(self.round, "confirmed_fishing_bar", False) and self.round.bar_seen_streak >= 2:
             self.round.confirmed_fishing_bar = True
             self.round.fishing_bar_confirmed_time = now
             if not getattr(self.round, "fishing_control_started", False):
@@ -889,7 +897,7 @@ class StateMachine:
         self.round.last_control_target_w = target_w
 
         now = time.time()
-        if getattr(self.round, 'last_target_time', 0) == 0:
+        if getattr(self.round, "last_target_time", 0) == 0:
             self.round.last_target_x = target_x
             self.round.last_target_time = now
             target_velocity = 0
@@ -897,18 +905,18 @@ class StateMachine:
             dt = now - self.round.last_target_time
             if dt > 0.001:
                 raw_velocity = (target_x - self.round.last_target_x) / dt
-                old_velocity = getattr(self.round, 'target_velocity', 0)
+                old_velocity = getattr(self.round, "target_velocity", 0)
                 target_velocity = old_velocity * 0.70 + raw_velocity * 0.30
             else:
-                target_velocity = getattr(self.round, 'target_velocity', 0)
+                target_velocity = getattr(self.round, "target_velocity", 0)
             self.round.last_target_x = target_x
             self.round.last_target_time = now
             self.round.target_velocity = target_velocity
-            
+
         # 动态安全区：低级鱼竿容错更小，默认更积极追赶。
         safe_zone_ratio = self._normalize_ratio_config("safe_zone_ratio", 0.08, 0.04, 0.28)
         safe_zone = target_w * safe_zone_ratio if target_w else 8
-        
+
         # PID 控制器计算基础偏差修正力
         tracking_strength = self._normalize_tracking_strength()
         control_signal = self.pid.update(error, measurement=target_x) * tracking_strength
@@ -945,7 +953,7 @@ class StateMachine:
             return
         self._log("[结算] 正在检测钓鱼结果...")
 
-        max_attempts = 10 # 增加循环次数，但缩短每次的等待时间，实现更敏捷的响应
+        max_attempts = 10  # 增加循环次数，但缩短每次的等待时间，实现更敏捷的响应
         if getattr(self.round, "success_recorded_pending_close", False):
             ready_info = self.cast_det.detect_ready_to_cast(rect, allow_heavy=False, require_initial_controls=True)
             if ready_info and ready_info.get("location"):
@@ -1012,7 +1020,7 @@ class StateMachine:
                     return
             else:
                 self.result_det.clear_result_ready_candidate()
-                    
+
             # 如果既没有 F 键，也没有底部文字，说明可能还在播放动画，稍微等一下继续循环
             if not self._sleep_interruptible(0.25):
                 return
@@ -1046,7 +1054,7 @@ class StateMachine:
         if getattr(self.round, "recovery_esc_requested", False) and not getattr(self.round, "recovery_esc_sent", False):
             self.ctrl.release_all()
             self._esc_safe_gap(0.30)
-            if not self._tap_key_if_running('esc', duration=0.15):
+            if not self._tap_key_if_running("esc", duration=0.15):
                 return
             self.round.recovery_esc_sent = True
             self.round.recovery_first_esc_time = time.time()
@@ -1054,17 +1062,11 @@ class StateMachine:
             return
 
         first_esc_elapsed = now - getattr(self.round, "recovery_first_esc_time", 0) if getattr(self.round, "recovery_esc_sent", False) else 999
-        if (
-            getattr(self.round, "recovery_esc_requested", False)
-            and getattr(self.round, "recovery_allow_second_esc", True)
-            and elapsed >= 3.0
-            and first_esc_elapsed >= 1.0
-            and not getattr(self.round, "recovery_second_esc_sent", False)
-        ):
+        if getattr(self.round, "recovery_esc_requested", False) and getattr(self.round, "recovery_allow_second_esc", True) and elapsed >= 3.0 and first_esc_elapsed >= 1.0 and not getattr(self.round, "recovery_second_esc_sent", False):
             self._log("[恢复] 暂未看到可抛钩提示，执行一次轻量 ESC 复位。")
             self.ctrl.release_all()
             self._esc_safe_gap(0.30)
-            if not self._tap_key_if_running('esc', duration=0.12):
+            if not self._tap_key_if_running("esc", duration=0.12):
                 return
             self.round.recovery_second_esc_sent = True
             self._sleep_interruptible(0.35)

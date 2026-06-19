@@ -15,31 +15,33 @@ _RECORD_FILE_LOCK = threading.RLock()
 ENCYCLOPEDIA_RESOURCE_DIR = "异环鱼类图鉴资源"
 ENCYCLOPEDIA_RESOURCE_DIR_ASCII = "fish_encyclopedia"
 AUTO_CAPTURED_RARITY = "未知稀有度"
-OCR_CONFUSABLE_CHARS = str.maketrans({
-    "賽": "紫",
-    "赛": "紫",
-    "慈": "斑",
-    "班": "斑",
-    "部": "斑",
-    "幔": "鳗",
-    "鳄": "鲷",
-    "勰": "鲷",
-    "魚": "鱼",
-    "魯": "鱼",
-    "鲁": "鱼",
-    "食": "鱼",
-    # --- 繁简转换 ---
-    "鱗": "鳞",
-    "鯨": "鲸",
-    "燈": "灯",
-    "條": "条",
-    "鰻": "鳗",
-    "鰭": "鳍",
-    "鯛": "鲷",
-    "繡": "绣",
-    "鰠": "鳋",
-    "鳳": "凤",
-})
+OCR_CONFUSABLE_CHARS = str.maketrans(
+    {
+        "賽": "紫",
+        "赛": "紫",
+        "慈": "斑",
+        "班": "斑",
+        "部": "斑",
+        "幔": "鳗",
+        "鳄": "鲷",
+        "勰": "鲷",
+        "魚": "鱼",
+        "魯": "鱼",
+        "鲁": "鱼",
+        "食": "鱼",
+        # --- 繁简转换 ---
+        "鱗": "鳞",
+        "鯨": "鲸",
+        "燈": "灯",
+        "條": "条",
+        "鰻": "鳗",
+        "鰭": "鳍",
+        "鯛": "鲷",
+        "繡": "绣",
+        "鰠": "鳋",
+        "鳳": "凤",
+    }
+)
 
 
 class RecordManager:
@@ -240,11 +242,7 @@ class RecordManager:
             else:
                 last_time = summary.get("last_time", "")
                 if last_time:
-                    matched_ids = [
-                        self._safe_int(record.get("record_id"), 0)
-                        for record in history
-                        if isinstance(record, dict) and record.get("time", "") <= last_time
-                    ]
+                    matched_ids = [self._safe_int(record.get("record_id"), 0) for record in history if isinstance(record, dict) and record.get("time", "") <= last_time]
                     last_record_id = max(matched_ids, default=max_record_id)
                 else:
                     last_record_id = max_record_id
@@ -339,11 +337,13 @@ class RecordManager:
             current = [i]
             for j, right_char in enumerate(right, start=1):
                 cost = 0 if left_char == right_char else 1
-                current.append(min(
-                    previous[j] + 1,
-                    current[j - 1] + 1,
-                    previous[j - 1] + cost,
-                ))
+                current.append(
+                    min(
+                        previous[j] + 1,
+                        current[j - 1] + 1,
+                        previous[j - 1] + cost,
+                    )
+                )
             previous = current
         return previous[-1]
 
@@ -694,10 +694,7 @@ class RecordManager:
         last_record_id = self._safe_int(summary.get("last_record_id"), 0)
 
         if last_record_id >= 0:
-            return [
-                record for record in history
-                if self._safe_int(record.get("record_id"), 0) > last_record_id
-            ]
+            return [record for record in history if self._safe_int(record.get("record_id"), 0) > last_record_id]
 
         last_time = summary.get("last_time", "")
         if last_time:

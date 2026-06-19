@@ -3,9 +3,10 @@ import mss.exception
 import numpy as np
 import time
 
+
 class ScreenCapture:
     """屏幕截图工具类，使用 mss 实现高频低延迟截图"""
-    
+
     def __init__(self):
         # 放弃全局单例，改为每个线程拥有自己独立的 mss 实例
         # 这样在线程销毁时，可以安全地释放对应的系统 GDI 句柄
@@ -39,7 +40,7 @@ class ScreenCapture:
         if should_log:
             print(f"[ScreenCapture] {prefix}: {exc} (连续失败 {self._failure_count} 次，正在重建截图句柄)")
             self._last_error_log_time = now
-        
+
     def close(self):
         """显式释放 mss 占用的系统 GDI 句柄资源"""
         sct = getattr(self, "sct", None)
@@ -49,7 +50,7 @@ class ScreenCapture:
             except Exception:
                 pass
         self.sct = None
-            
+
     def capture_roi(self, left, top, width, height):
         """
         截取屏幕上指定 ROI 区域，并返回 numpy (OpenCV BGR格式)
@@ -60,13 +61,8 @@ class ScreenCapture:
         if width <= 10 or height <= 10:
             return None
 
-        monitor = {
-            "top": int(top),
-            "left": int(left),
-            "width": int(width),
-            "height": int(height)
-        }
-        
+        monitor = {"top": int(top), "left": int(left), "width": int(width), "height": int(height)}
+
         for attempt in range(2):
             if self.sct is None and not self._recreate_sct():
                 time.sleep(0.03)
@@ -92,7 +88,7 @@ class ScreenCapture:
                 time.sleep(0.01)
 
         return None
-        
+
     def capture_relative(self, window_rect, rx, ry, rw, rh):
         """
         基于客户区窗口截取相对区域。
@@ -108,14 +104,14 @@ class ScreenCapture:
         """把客户区比例 ROI 转换成屏幕绝对像素 ROI。"""
         if not window_rect:
             return None
-            
+
         w_left, w_top, w_width, w_height = window_rect
         if w_width <= 0 or w_height <= 0:
             return None
-        
+
         abs_left = w_left + int(w_width * rx)
         abs_top = w_top + int(w_height * ry)
         abs_width = max(1, int(w_width * rw))
         abs_height = max(1, int(w_height * rh))
-        
+
         return abs_left, abs_top, abs_width, abs_height

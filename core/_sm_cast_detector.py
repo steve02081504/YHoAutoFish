@@ -47,13 +47,15 @@ class CastDetector:
             )
             best_conf = max(best_conf, float(conf or 0.0))
             if loc:
-                matches.append({
-                    "key": key_name,
-                    "location": loc,
-                    "confidence": conf,
-                    "template": matched_path,
-                    "strategy": strategy_name,
-                })
+                matches.append(
+                    {
+                        "key": key_name,
+                        "location": loc,
+                        "confidence": conf,
+                        "template": matched_path,
+                        "strategy": strategy_name,
+                    }
+                )
 
         if matches:
             avg_conf = sum(item["confidence"] for item in matches) / len(matches)
@@ -84,17 +86,8 @@ class CastDetector:
         ys = [float(point[1]) for point in centers]
         x_span = max(xs) - min(xs)
         y_span = max(ys) - min(ys)
-        horizontal_layout = (
-            x_span >= max(56.0, width * 0.10)
-            and x_span <= max(360.0, width * 0.72)
-            and y_span <= max(90.0, height * 0.24)
-            and min(ys) >= height * 0.52
-        )
-        vertical_layout = (
-            x_span <= max(130.0, width * 0.28)
-            and y_span >= max(42.0, height * 0.14)
-            and min(ys) >= height * 0.20
-        )
+        horizontal_layout = x_span >= max(56.0, width * 0.10) and x_span <= max(360.0, width * 0.72) and y_span <= max(90.0, height * 0.24) and min(ys) >= height * 0.52
+        vertical_layout = x_span <= max(130.0, width * 0.28) and y_span >= max(42.0, height * 0.14) and min(ys) >= height * 0.20
         if not horizontal_layout and not vertical_layout:
             return False
 
@@ -273,12 +266,16 @@ class CastDetector:
                 }
 
         if not include_prepare_ui:
-            return {
-                "kind": "",
-                "confidence": best_conf,
-                "location": None,
-                "template": None,
-            } if best_conf >= 0 else None
+            return (
+                {
+                    "kind": "",
+                    "confidence": best_conf,
+                    "location": None,
+                    "template": None,
+                }
+                if best_conf >= 0
+                else None
+            )
 
         start_button_roi = (0.15, 0.74, 0.70, 0.23)
         start_img = self._sm.sc.capture_relative(rect, *start_button_roi)
@@ -337,12 +334,16 @@ class CastDetector:
                             "template": matched_path,
                         }
 
-        return {
-            "kind": "",
-            "confidence": best_conf,
-            "location": None,
-            "template": None,
-        } if best_conf >= 0 else None
+        return (
+            {
+                "kind": "",
+                "confidence": best_conf,
+                "location": None,
+                "template": None,
+            }
+            if best_conf >= 0
+            else None
+        )
 
     # ------------------------------------------------------------------
     # 7. 就绪时的结算阻塞预检
@@ -437,9 +438,7 @@ class CastDetector:
         loc, conf, matched_path, strategy_name = self._sm.vis.find_best_template_multi_strategy(
             btn_img,
             self._sm.tpl.f_button_templates(),
-            (
-                {"name": "settlement-f-gray", "threshold": 0.60, "use_mask": True, "early_accept": 0.94},
-            ),
+            ({"name": "settlement-f-gray", "threshold": 0.60, "use_mask": True, "early_accept": 0.94},),
             threshold=0.60,
             scale_range=self._sm.tpl.scale_range(rect, 0.82, 1.28),
             scale_steps=3,

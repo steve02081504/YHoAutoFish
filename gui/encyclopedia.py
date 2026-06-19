@@ -82,9 +82,7 @@ class FishCard(QFrame):
         top_row.setSpacing(10)
 
         self.type_label = QLabel("鱼")
-        self.type_label.setStyleSheet(
-            f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 12px; font-weight: 800;"
-        )
+        self.type_label.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 12px; font-weight: 800;")
         top_row.addWidget(self.type_label)
         top_row.addStretch()
 
@@ -140,16 +138,12 @@ class FishCard(QFrame):
         self.name_label.setWordWrap(True)
         self.name_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.name_label.setMinimumHeight(78)
-        self.name_label.setStyleSheet(
-            "background: transparent; border: none; color: #FFFFFF; font-size: 17px; font-weight: 900;"
-        )
+        self.name_label.setStyleSheet("background: transparent; border: none; color: #FFFFFF; font-size: 17px; font-weight: 900;")
         text_col.addWidget(self.name_label)
 
         self.meta_label = QLabel("")
         self.meta_label.setWordWrap(True)
-        self.meta_label.setStyleSheet(
-            f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 12px; font-weight: 600;"
-        )
+        self.meta_label.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 12px; font-weight: 600;")
         text_col.addWidget(self.meta_label)
 
         text_col.addStretch()
@@ -168,7 +162,7 @@ class FishCard(QFrame):
             background-color: rgba(255, 255, 255, 0.05);
             border: none;
             border-radius: 11px;
-            color: {APP_COLORS['text']};
+            color: {APP_COLORS["text"]};
             font-size: 12px;
             font-weight: 800;
             padding: 6px 10px;
@@ -178,16 +172,12 @@ class FishCard(QFrame):
 
         self.desc_label = QLabel()
         self.desc_label.setWordWrap(True)
-        self.desc_label.setStyleSheet(
-            f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 13px; font-weight: 600;"
-        )
+        self.desc_label.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 13px; font-weight: 600;")
         footer_layout.addWidget(self.desc_label)
 
         self.time_label = QLabel()
         self.time_label.setWordWrap(True)
-        self.time_label.setStyleSheet(
-            f"background: transparent; border: none; color: {APP_COLORS['text_soft']}; font-size: 12px;"
-        )
+        self.time_label.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text_soft']}; font-size: 12px;")
         footer_layout.addWidget(self.time_label)
         layout.addWidget(self.footer, 1)
 
@@ -327,7 +317,7 @@ class FishCard(QFrame):
             background-color: rgba(255, 255, 255, {12 + int(hover_ratio * 8)});
             border: none;
             border-radius: 11px;
-            color: {APP_COLORS['text']};
+            color: {APP_COLORS["text"]};
             font-size: 12px;
             font-weight: 800;
             padding: 6px 10px;
@@ -338,7 +328,7 @@ class FishCard(QFrame):
             f"""
             background: transparent;
             border: none;
-            color: {APP_COLORS['accent_soft'] if is_unlocked else APP_COLORS['text_dim']};
+            color: {APP_COLORS["accent_soft"] if is_unlocked else APP_COLORS["text_dim"]};
             font-size: 12px;
             font-weight: 700;
             """
@@ -365,9 +355,7 @@ class FishCard(QFrame):
         self.count_badge.setVisible(not self.show_all_mode)
         self.count_badge.setText(f"x{self.caught_count}")
         self.name_label.setText(self.name)
-        self.name_label.setStyleSheet(
-            "background: transparent; border: none; color: #FFFFFF; font-size: 17px; font-weight: 900;"
-        )
+        self.name_label.setStyleSheet("background: transparent; border: none; color: #FFFFFF; font-size: 17px; font-weight: 900;")
         self.meta_label.setText(f"{meta['label']} · {'已解锁' if self.caught_count > 0 else '未获取'}")
 
         if self.show_all_mode:
@@ -375,9 +363,7 @@ class FishCard(QFrame):
             self.time_label.setText("当前模式不显示累计钓起数量。")
         elif self.caught_count > 0:
             self.desc_label.setText("该目标已纳入自动钓鱼总记录，可结合捕获次数与最大重量持续观察收藏进度。")
-            self.time_label.setText(
-                f"累计钓起 {self.caught_count} 条 · 最大重量 {self.data.get('max_weight', 0)} g"
-            )
+            self.time_label.setText(f"累计钓起 {self.caught_count} 条 · 最大重量 {self.data.get('max_weight', 0)} g")
         else:
             self.desc_label.setText("尚未获取该鱼类，当前仅灰化鱼图，鱼名与文本依然保持清晰可读，便于查阅。")
             self.time_label.setText("累计钓起 0 条")
@@ -456,21 +442,15 @@ class EncyclopediaWidget(QWidget):
         layout.setSpacing(8)
 
         title_label = QLabel(title)
-        title_label.setStyleSheet(
-            f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 13px; font-weight: 700;"
-        )
+        title_label.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 13px; font-weight: 700;")
         layout.addWidget(title_label)
 
         value_label = QLabel(value)
-        value_label.setStyleSheet(
-            f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 24px; font-weight: 900;"
-        )
+        value_label.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 24px; font-weight: 900;")
         layout.addWidget(value_label)
 
         note_label = QLabel(note)
-        note_label.setStyleSheet(
-            f"background: transparent; border: none; color: {APP_COLORS['text_soft']}; font-size: 12px;"
-        )
+        note_label.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text_soft']}; font-size: 12px;")
         layout.addWidget(note_label)
 
         panel.value_label = value_label
@@ -540,9 +520,7 @@ class EncyclopediaWidget(QWidget):
         encyclopedia = self.record_mgr.get_encyclopedia()
         ordered = []
         for rarity in RARITY_ORDER:
-            fishes = sorted(
-                (name, data) for name, data in encyclopedia.items() if data.get("rarity") == rarity
-            )
+            fishes = sorted((name, data) for name, data in encyclopedia.items() if data.get("rarity") == rarity)
             ordered.extend(fishes)
 
         cache = ImageCache.get_instance()

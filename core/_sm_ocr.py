@@ -57,6 +57,7 @@ def _detect_det_model_name(cnstd_root):
             return _auto_det_model_name
     return "naive_det"
 
+
 SETTLEMENT_FISH_IMAGE_ROIS = (
     (0.33, 0.24, 0.34, 0.34),
     (0.30, 0.22, 0.40, 0.38),
@@ -175,19 +176,9 @@ class SettlementOCR:
 
         missing_models = self.missing_required_ocr_models()
         if missing_models:
-            parts.append(
-                "缺少本地 OCR 模型文件："
-                + "；".join(str(path) for path in missing_models)
-                + "。请确保项目根目录下存在完整的 ocr_models 目录。"
-            )
+            parts.append("缺少本地 OCR 模型文件：" + "；".join(str(path) for path in missing_models) + "。请确保项目根目录下存在完整的 ocr_models 目录。")
 
-        parts.append(
-            "依赖版本："
-            f"cnocr={self.package_version('cnocr')}，"
-            f"cnstd={self.package_version('cnstd')}，"
-            f"onnxruntime={self.package_version('onnxruntime')}，"
-            f"rapidocr={self.package_version('rapidocr')}。"
-        )
+        parts.append(f"依赖版本：cnocr={self.package_version('cnocr')}，cnstd={self.package_version('cnstd')}，onnxruntime={self.package_version('onnxruntime')}，rapidocr={self.package_version('rapidocr')}。")
 
         self.last_ocr_init_error = " ".join(part for part in parts if part)
         if exc is not None:
@@ -222,6 +213,7 @@ class SettlementOCR:
             self._ocr_import_checked = True
             try:
                 from cnocr import CnOcr as LoadedCnOcr
+
                 CnOcr = LoadedCnOcr
             except Exception as exc:
                 self.ocr_available = False
@@ -235,10 +227,7 @@ class SettlementOCR:
         missing_models = self.missing_required_ocr_models()
         if missing_models:
             self.ocr_available = False
-            self.set_ocr_init_error(
-                "初始化本地模型",
-                detail="随程序分发的 OCR 模型未能写入当前用户缓存。"
-            )
+            self.set_ocr_init_error("初始化本地模型", detail="随程序分发的 OCR 模型未能写入当前用户缓存。")
             return None
         if mode not in self.ocr:
             try:
@@ -341,10 +330,7 @@ class SettlementOCR:
         center_y = height / 2
         boxes.sort(key=lambda item: abs((item[0] + item[2] / 2) - center_x) + abs((item[1] + item[3] / 2) - center_y) * 0.55)
         row_y = boxes[0][1] + boxes[0][3] / 2
-        row_boxes = [
-            box for box in boxes
-            if abs((box[1] + box[3] / 2) - row_y) < max(18, int(height * 0.20))
-        ]
+        row_boxes = [box for box in boxes if abs((box[1] + box[3] / 2) - row_y) < max(18, int(height * 0.20))]
 
         x1 = min(x for x, _, _, _ in row_boxes)
         y1 = min(y for _, y, _, _ in row_boxes)
@@ -390,10 +376,7 @@ class SettlementOCR:
 
         max_height = max(h for _, _, _, h in boxes)
         top_y = min(y for _, y, _, h in boxes if h >= max_height * 0.70)
-        digit_boxes = [
-            box for box in boxes
-            if box[3] >= max_height * 0.68 and box[1] <= top_y + max(8, int(max_height * 0.24))
-        ]
+        digit_boxes = [box for box in boxes if box[3] >= max_height * 0.68 and box[1] <= top_y + max(8, int(max_height * 0.24))]
         if not digit_boxes:
             return image
 
@@ -503,17 +486,21 @@ class SettlementOCR:
         if not raw_text:
             return 0
 
-        normalized = raw_text.translate(str.maketrans({
-            "O": "0",
-            "o": "0",
-            "〇": "0",
-            "I": "1",
-            "l": "1",
-            "|": "1",
-            "S": "5",
-            "s": "5",
-            "B": "8",
-        }))
+        normalized = raw_text.translate(
+            str.maketrans(
+                {
+                    "O": "0",
+                    "o": "0",
+                    "〇": "0",
+                    "I": "1",
+                    "l": "1",
+                    "|": "1",
+                    "S": "5",
+                    "s": "5",
+                    "B": "8",
+                }
+            )
+        )
         compact = re.sub(r"\s+", "", normalized)
 
         explicit_match = re.search(r"(\d{1,5})(?:[gG克])", compact)
@@ -571,17 +558,25 @@ class SettlementOCR:
                         if value <= 0:
                             continue
                         digit_count = len(str(value))
-                        compact = re.sub(r"\s+", "", str(text or "").translate(str.maketrans({
-                            "O": "0",
-                            "o": "0",
-                            "〇": "0",
-                            "I": "1",
-                            "l": "1",
-                            "|": "1",
-                            "S": "5",
-                            "s": "5",
-                            "B": "8",
-                        })))
+                        compact = re.sub(
+                            r"\s+",
+                            "",
+                            str(text or "").translate(
+                                str.maketrans(
+                                    {
+                                        "O": "0",
+                                        "o": "0",
+                                        "〇": "0",
+                                        "I": "1",
+                                        "l": "1",
+                                        "|": "1",
+                                        "S": "5",
+                                        "s": "5",
+                                        "B": "8",
+                                    }
+                                )
+                            ),
+                        )
                         has_unit = 1 if re.search(r"\d{1,5}(?:[gG克])", compact) else 0
                         weight_candidates.append((value, float(score or 0.0), has_unit, digit_count, text))
                 else:
@@ -651,7 +646,7 @@ class SettlementOCR:
                 image = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
 
             h, w = image.shape[:2]
-            crop = image[int(h * 0.12):int(h * 0.82), int(w * 0.12):int(w * 0.88)]
+            crop = image[int(h * 0.12) : int(h * 0.82), int(w * 0.12) : int(w * 0.88)]
             gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
             gray = cv2.equalizeHist(gray)
             _, descriptors = orb.detectAndCompute(gray, None)
@@ -678,7 +673,7 @@ class SettlementOCR:
             if image is None or image.size == 0:
                 continue
             h, w = image.shape[:2]
-            crop = image[int(h * 0.12):int(h * 0.88), int(w * 0.12):int(w * 0.88)]
+            crop = image[int(h * 0.12) : int(h * 0.88), int(w * 0.12) : int(w * 0.88)]
             gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
             gray = cv2.equalizeHist(gray)
             _, query_desc = orb.detectAndCompute(gray, None)
@@ -687,9 +682,7 @@ class SettlementOCR:
 
             for name, ref_desc in refs:
                 matches = matcher.knnMatch(query_desc, ref_desc, k=2)
-                good_matches = [
-                    m for pair in matches if len(pair) == 2 for m, n in [pair] if m.distance < 0.72 * n.distance
-                ]
+                good_matches = [m for pair in matches if len(pair) == 2 for m, n in [pair] if m.distance < 0.72 * n.distance]
                 score = len(good_matches)
                 if score > best_score:
                     second_score = best_score
@@ -746,7 +739,7 @@ class SettlementOCR:
                 if coords is None:
                     continue
                 x, y, w, h = cv2.boundingRect(coords)
-                crop = binary[y:y + h, x:x + w]
+                crop = binary[y : y + h, x : x + w]
                 crop = cv2.resize(crop, (52, 84), interpolation=cv2.INTER_AREA)
                 templates[digit].append(crop)
 
@@ -775,9 +768,7 @@ class SettlementOCR:
             if image is None or image.size == 0:
                 continue
             digit_image = self.crop_weight_digits_region(image)
-            value = self.extract_weight_from_image_by_template(
-                digit_image if digit_image is not None and digit_image.size > 0 else image
-            )
+            value = self.extract_weight_from_image_by_template(digit_image if digit_image is not None and digit_image.size > 0 else image)
             if value > 0:
                 return value
         return 0
@@ -811,7 +802,7 @@ class SettlementOCR:
             if y > top_y + max_height * 0.12:
                 continue
             pad = 4
-            crop = binary[max(0, y - pad):min(h, y + ch + pad), max(0, x - pad):min(w, x + cw + pad)]
+            crop = binary[max(0, y - pad) : min(h, y + ch + pad), max(0, x - pad) : min(w, x + cw + pad)]
             digit, score = self.classify_digit_image(crop)
             if digit and score >= 0.18:
                 digits.append(digit)

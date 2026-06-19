@@ -2,9 +2,10 @@ import ctypes
 import time
 import pydirectinput  # 引入更成熟的底层模拟库
 
+
 class Controller:
     """键盘控制器，使用 pydirectinput 解决 3D 游戏屏蔽按键问题"""
-    
+
     def __init__(self):
         self.pressed_keys = set()
         # 【极度关键】：pydirectinput 默认每次操作后会强制 sleep 0.01 秒
@@ -64,7 +65,7 @@ class Controller:
         except Exception as e:
             print(f"[Controller] MouseClick error: {e}")
             return False
-        
+
     def release_all(self):
         """释放所有记录在案的被按下的键 (安全保护)"""
         for key in list(self.pressed_keys):

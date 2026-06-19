@@ -3,6 +3,7 @@ from pathlib import Path
 
 import cv2
 
+
 class ResultDetector:
     """从 StateMachine 提取的结果检测相关方法集合。"""
 
@@ -96,12 +97,8 @@ class ResultDetector:
             rect,
             "click close prompt",
             self._sm.tpl.success_close_prompt_templates(),
-            (
-                (0.22, 0.76, 0.56, 0.20),
-            ),
-            (
-                {"name": "close-ultra-edge", "threshold": 0.70, "use_edge": True, "early_accept": 0.92},
-            ),
+            ((0.22, 0.76, 0.56, 0.20),),
+            ({"name": "close-ultra-edge", "threshold": 0.70, "use_edge": True, "early_accept": 0.92},),
             threshold=0.70,
             low_factor=0.82,
             high_factor=1.24,
@@ -114,12 +111,8 @@ class ResultDetector:
             rect,
             "fishing exp prompt",
             self._sm.tpl.success_exp_templates(),
-            (
-                (0.24, 0.48, 0.52, 0.25),
-            ),
-            (
-                {"name": "exp-ultra-edge", "threshold": 0.64, "use_edge": True, "early_accept": 0.90},
-            ),
+            ((0.24, 0.48, 0.52, 0.25),),
+            ({"name": "exp-ultra-edge", "threshold": 0.64, "use_edge": True, "early_accept": 0.90},),
             threshold=0.64,
             low_factor=0.82,
             high_factor=1.24,
@@ -130,12 +123,8 @@ class ResultDetector:
                 rect,
                 "重量单位 g",
                 self._sm.tpl.weight_unit_templates(),
-                (
-                    (0.33, 0.58, 0.34, 0.18),
-                ),
-                (
-                    {"name": "g-ultra-plain", "threshold": 0.70},
-                ),
+                ((0.33, 0.58, 0.34, 0.18),),
+                ({"name": "g-ultra-plain", "threshold": 0.70},),
                 threshold=0.70,
                 low_factor=0.82,
                 high_factor=1.24,
@@ -187,9 +176,7 @@ class ResultDetector:
                 (0.33, 0.58, 0.34, 0.18),
                 (0.30, 0.56, 0.42, 0.22),
             ),
-            (
-                {"name": "g-fast-plain", "threshold": 0.64},
-            ),
+            ({"name": "g-fast-plain", "threshold": 0.64},),
             threshold=0.64,
             low_factor=0.70,
             high_factor=1.35,
@@ -207,9 +194,7 @@ class ResultDetector:
                 (0.24, 0.48, 0.52, 0.25),
                 (0.18, 0.42, 0.64, 0.32),
             ),
-            (
-                {"name": "exp-fast-edge", "threshold": 0.58, "use_edge": True},
-            ),
+            ({"name": "exp-fast-edge", "threshold": 0.58, "use_edge": True},),
             threshold=0.58,
             low_factor=0.70,
             high_factor=1.35,
@@ -226,9 +211,7 @@ class ResultDetector:
             rect,
             "鱼儿溜走了",
             self._sm.tpl.failed_text_templates(),
-            (
-                (0.18, 0.38, 0.64, 0.22),
-            ),
+            ((0.18, 0.38, 0.64, 0.22),),
             (
                 {"name": "failed-fast-edge", "threshold": 0.64, "use_edge": True},
                 {"name": "failed-fast-plain", "threshold": 0.70},
@@ -488,12 +471,7 @@ class ResultDetector:
 
     def round_fishing_elapsed(self):
         r = self._sm.round
-        start_time = (
-            r.fishing_control_started_time
-            or r.fishing_bar_confirmed_time
-            or self._sm.fishing_start_time
-            or r.fishing_start_time
-        )
+        start_time = r.fishing_control_started_time or r.fishing_bar_confirmed_time or self._sm.fishing_start_time or r.fishing_start_time
         if not start_time:
             return 0.0
         return max(0.0, time.time() - start_time)
@@ -650,7 +628,7 @@ class ResultDetector:
             self._sm._log(f"[结算] 本次成功结算已记录，继续尝试 ESC 关闭结算界面 (尝试 {attempt}/{max_attempts})...")
 
         self._sm._esc_safe_gap(0.30)
-        if not self._sm._tap_key_if_running('esc', duration=0.15):
+        if not self._sm._tap_key_if_running("esc", duration=0.15):
             return
         self._sm.round.success_close_retry_count = max(int(getattr(self._sm.round, "success_close_retry_count", 0)), int(attempt))
         self._sm.round.success_close_last_esc = time.time()

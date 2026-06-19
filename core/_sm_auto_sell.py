@@ -25,7 +25,7 @@ class AutoSeller:
 
     @property
     def session_catch_count(self):
-        return getattr(self._sm, '_auto_sell_session_catch_count', 0)
+        return getattr(self._sm, "_auto_sell_session_catch_count", 0)
 
     @session_catch_count.setter
     def session_catch_count(self, v):
@@ -33,7 +33,7 @@ class AutoSeller:
 
     @property
     def pending(self):
-        return getattr(self._sm, '_auto_sell_pending', False)
+        return getattr(self._sm, "_auto_sell_pending", False)
 
     @pending.setter
     def pending(self, v):
@@ -41,7 +41,7 @@ class AutoSeller:
 
     @property
     def step(self):
-        return getattr(self._sm, '_auto_sell_step', '')
+        return getattr(self._sm, "_auto_sell_step", "")
 
     @step.setter
     def step(self, v):
@@ -49,7 +49,7 @@ class AutoSeller:
 
     @property
     def step_started(self):
-        return getattr(self._sm, '_auto_sell_step_started', 0)
+        return getattr(self._sm, "_auto_sell_step_started", 0)
 
     @step_started.setter
     def step_started(self, v):
@@ -57,7 +57,7 @@ class AutoSeller:
 
     @property
     def started_at(self):
-        return getattr(self._sm, '_auto_sell_started_at', 0)
+        return getattr(self._sm, "_auto_sell_started_at", 0)
 
     @started_at.setter
     def started_at(self, v):
@@ -65,7 +65,7 @@ class AutoSeller:
 
     @property
     def last_log(self):
-        return getattr(self._sm, '_auto_sell_last_log', 0)
+        return getattr(self._sm, "_auto_sell_last_log", 0)
 
     @last_log.setter
     def last_log(self, v):
@@ -73,7 +73,7 @@ class AutoSeller:
 
     @property
     def ready_wait_started(self):
-        return getattr(self._sm, '_auto_sell_ready_wait_started', 0)
+        return getattr(self._sm, "_auto_sell_ready_wait_started", 0)
 
     @ready_wait_started.setter
     def ready_wait_started(self, v):
@@ -81,7 +81,7 @@ class AutoSeller:
 
     @property
     def capture_hidden(self):
-        return getattr(self._sm, '_auto_sell_capture_hidden', False)
+        return getattr(self._sm, "_auto_sell_capture_hidden", False)
 
     @capture_hidden.setter
     def capture_hidden(self, v):
@@ -106,10 +106,7 @@ class AutoSeller:
         if self.session_catch_count >= threshold and not self.pending:
             self.pending = True
             self.ready_wait_started = 0
-            self._sm._log(
-                f"[售鱼] 本次运行已累计钓获 {self.session_catch_count} 条，"
-                "达到自动售鱼阈值，等待回到可抛竿界面后出售鱼获。"
-            )
+            self._sm._log(f"[售鱼] 本次运行已累计钓获 {self.session_catch_count} 条，达到自动售鱼阈值，等待回到可抛竿界面后出售鱼获。")
 
     def reset(self):
         self.session_catch_count = 0
@@ -130,9 +127,7 @@ class AutoSeller:
             return
         self.capture_hidden = hidden
         if self._sm.log_queue:
-            self._sm.log_queue.put(
-                "CMD_FLOATING_HIDE_FOR_CAPTURE" if hidden else "CMD_FLOATING_RESTORE_AFTER_CAPTURE"
-            )
+            self._sm.log_queue.put("CMD_FLOATING_HIDE_FOR_CAPTURE" if hidden else "CMD_FLOATING_RESTORE_AFTER_CAPTURE")
 
     # ------------------------------------------------------------------
     #  步骤管理
@@ -172,9 +167,7 @@ class AutoSeller:
     def fail(self, reason, press_esc=True, rect=None):
         self._sm._log(f"[售鱼] {reason}，本次自动售鱼停止，避免继续误操作。")
         if press_esc and not self._sm._should_stop():
-            ready_info = self._sm.cast_det.detect_ready_to_cast(
-                rect, allow_heavy=False, require_initial_controls=True
-            ) if rect else None
+            ready_info = self._sm.cast_det.detect_ready_to_cast(rect, allow_heavy=False, require_initial_controls=True) if rect else None
             if not (ready_info and ready_info.get("location")):
                 self._sm._esc_safe_gap(0.30)
                 self._sm._tap_key_if_running("esc", duration=0.12)

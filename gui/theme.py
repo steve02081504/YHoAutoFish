@@ -88,14 +88,14 @@ def panel_stylesheet(accent=None):
     accent = accent or APP_COLORS["accent"]
     return f"""
     QWidget {{
-        color: {APP_COLORS['text']};
+        color: {APP_COLORS["text"]};
     }}
     QLabel {{
         background-color: transparent;
         border: none;
     }}
     QFrame {{
-        background-color: {APP_COLORS['glass']};
+        background-color: {APP_COLORS["glass"]};
         border: 1px solid rgba(111, 145, 182, 0.18);
         border-radius: 24px;
     }}
@@ -104,26 +104,26 @@ def panel_stylesheet(accent=None):
         border: 1px solid rgba(93, 132, 174, 0.22);
     }}
     QFrame[variant="soft"] {{
-        background-color: {APP_COLORS['glass_soft']};
+        background-color: {APP_COLORS["glass_soft"]};
         border: 1px solid rgba(111, 145, 182, 0.15);
     }}
     QLabel[role="headline"] {{
         background-color: transparent;
         border: none;
-        color: {APP_COLORS['text']};
+        color: {APP_COLORS["text"]};
         font-size: 33px;
         font-weight: 900;
     }}
     QLabel[role="subtle"] {{
         background-color: transparent;
         border: none;
-        color: {APP_COLORS['text_dim']};
+        color: {APP_COLORS["text_dim"]};
         font-size: 13px;
     }}
     QLabel[role="section"] {{
         background-color: transparent;
         border: none;
-        color: {APP_COLORS['text']};
+        color: {APP_COLORS["text"]};
         font-size: 19px;
         font-weight: 800;
     }}
@@ -143,7 +143,7 @@ def line_edit_stylesheet():
     return f"""
     QLineEdit {{
         background-color: rgba(21, 35, 54, 0.86);
-        color: {APP_COLORS['text']};
+        color: {APP_COLORS["text"]};
         border: 1px solid rgba(111, 145, 182, 0.18);
         border-radius: 18px;
         padding: 12px 15px;
@@ -160,7 +160,7 @@ def combo_stylesheet():
     return f"""
     QComboBox {{
         background-color: rgba(21, 35, 54, 0.86);
-        color: {APP_COLORS['text']};
+        color: {APP_COLORS["text"]};
         border: 1px solid rgba(111, 145, 182, 0.18);
         border-radius: 18px;
         padding: 10px 14px;
@@ -176,7 +176,7 @@ def combo_stylesheet():
     }}
     QComboBox QAbstractItemView {{
         background-color: rgba(17, 27, 42, 0.98);
-        color: {APP_COLORS['text']};
+        color: {APP_COLORS["text"]};
         border: 1px solid rgba(111, 145, 182, 0.2);
         selection-background-color: rgba(29, 208, 214, 0.24);
         padding: 4px;
@@ -187,7 +187,7 @@ def combo_stylesheet():
 def primary_button_stylesheet():
     return f"""
     QPushButton {{
-        background-color: {APP_COLORS['accent']};
+        background-color: {APP_COLORS["accent"]};
         color: #051419;
         border: none;
         outline: none;
@@ -198,7 +198,7 @@ def primary_button_stylesheet():
         font-weight: 900;
     }}
     QPushButton:hover {{
-        background-color: {APP_COLORS['accent_soft']};
+        background-color: {APP_COLORS["accent_soft"]};
     }}
     QPushButton:pressed {{
         background-color: #13B5C0;
@@ -214,7 +214,7 @@ def secondary_button_stylesheet():
     return f"""
     QPushButton {{
         background-color: rgba(22, 35, 54, 0.72);
-        color: {APP_COLORS['text_dim']};
+        color: {APP_COLORS["text_dim"]};
         border: 1px solid rgba(111, 145, 182, 0.18);
         outline: none;
         border-radius: 18px;
@@ -224,13 +224,13 @@ def secondary_button_stylesheet():
         font-weight: 700;
     }}
     QPushButton:hover {{
-        color: {APP_COLORS['text']};
+        color: {APP_COLORS["text"]};
         border: 1px solid rgba(22, 209, 214, 0.4);
         background-color: rgba(25, 40, 61, 0.86);
     }}
     QPushButton:checked {{
         background-color: rgba(22, 209, 214, 0.16);
-        color: {APP_COLORS['accent_soft']};
+        color: {APP_COLORS["accent_soft"]};
         border: 1px solid rgba(22, 209, 214, 0.52);
     }}
     """
@@ -240,7 +240,7 @@ def table_stylesheet():
     return f"""
     QTableWidget, QTableView {{
         background-color: transparent;
-        color: {APP_COLORS['text']};
+        color: {APP_COLORS["text"]};
         border: none;
         gridline-color: rgba(77, 102, 130, 0.18);
         selection-background-color: rgba(22, 209, 214, 0.12);
@@ -249,7 +249,7 @@ def table_stylesheet():
     }}
     QHeaderView::section {{
         background-color: rgba(255, 255, 255, 0.03);
-        color: {APP_COLORS['text_dim']};
+        color: {APP_COLORS["text_dim"]};
         border: none;
         border-bottom: 1px solid rgba(111, 145, 182, 0.14);
         padding: 10px;
@@ -452,7 +452,7 @@ def text_edit_stylesheet():
     return f"""
     QTextEdit {{
         background-color: rgba(20, 34, 54, 0.82);
-        color: {APP_COLORS['text']};
+        color: {APP_COLORS["text"]};
         border: 1px solid rgba(111, 145, 182, 0.18);
         border-radius: 20px;
         padding: 14px;

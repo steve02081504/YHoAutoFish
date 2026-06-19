@@ -2,19 +2,17 @@ import cv2
 import numpy as np
 import os
 
+
 class VisionCore:
     def __init__(self):
         # 初始化默认的HSV阈值，后续可由GUI配置传入覆盖
-        self.hsv_config = {
-            "green": {"min": [40, 50, 50], "max": [80, 255, 255]},
-            "yellow": {"min": [15, 100, 100], "max": [35, 255, 255]}
-        }
+        self.hsv_config = {"green": {"min": [40, 50, 50], "max": [80, 255, 255]}, "yellow": {"min": [15, 100, 100], "max": [35, 255, 255]}}
         self._template_cache = {}
         self._processed_template_cache = {}
         # 预分配固定尺寸形态学核，避免每帧重复创建
         self._kernel_3x3 = np.ones((3, 3), np.uint8)
         self._kernel_2x3 = np.ones((2, 3), np.uint8)
-        
+
     def update_hsv_config(self, color_name, min_val, max_val):
         """用于GUI动态调节HSV参数"""
         if color_name in self.hsv_config:
@@ -138,7 +136,18 @@ class VisionCore:
             return [low]
         scales = list(np.linspace(high, low, steps))
         common_scales = (
-            0.50, 0.625, 0.75, 0.80, 0.90, 1.0, 1.10, 1.25, 1.50, 1.75, 2.0, 3.0,
+            0.50,
+            0.625,
+            0.75,
+            0.80,
+            0.90,
+            1.0,
+            1.10,
+            1.25,
+            1.50,
+            1.75,
+            2.0,
+            3.0,
         )
         if steps >= 7:
             scales.extend(scale for scale in common_scales if low <= scale <= high)
@@ -197,16 +206,16 @@ class VisionCore:
                 return None, 0.0
             if use_binary and cv2.countNonZero(screen_gray) < 5:
                 return None, 0.0
-            
+
             best_match = None
             best_val = -1
             best_loc = None
-            
+
             for scale in self._build_scales(scale_range=scale_range, scale_steps=scale_steps):
                 # 缩放模板
                 width = int(round(template_gray.shape[1] * scale))
                 height = int(round(template_gray.shape[0] * scale))
-                
+
                 # 如果缩放后的模板比截图还要大，就跳过
                 if width < 4 or height < 4 or width > screen_gray.shape[1] or height > screen_gray.shape[0]:
                     continue
@@ -229,7 +238,7 @@ class VisionCore:
                         match_method = cv2.TM_CCORR_NORMED
                     else:
                         resized_mask = None
-                
+
                 # 进行匹配
                 if resized_mask is not None:
                     res = cv2.matchTemplate(screen_gray, resized_template, match_method, mask=resized_mask)
@@ -238,7 +247,7 @@ class VisionCore:
                 res = np.nan_to_num(res, nan=-1.0, posinf=-1.0, neginf=-1.0)
                 min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
                 max_val = max(-1.0, min(1.0, float(max_val)))
-                
+
                 if max_val > best_val:
                     best_val = max_val
                     best_loc = max_loc
@@ -357,14 +366,16 @@ class VisionCore:
                     if max_val < threshold:
                         break
                     center = (max_loc[0] + width // 2, max_loc[1] + height // 2)
-                    if all((center[0] - item["location"][0]) ** 2 + (center[1] - item["location"][1]) ** 2 >= min_distance ** 2 for item in matches):
-                        matches.append({
-                            "location": center,
-                            "confidence": max_val,
-                            "template": template_path,
-                            "scale": scale,
-                            "size": (width, height),
-                        })
+                    if all((center[0] - item["location"][0]) ** 2 + (center[1] - item["location"][1]) ** 2 >= min_distance**2 for item in matches):
+                        matches.append(
+                            {
+                                "location": center,
+                                "confidence": max_val,
+                                "template": template_path,
+                                "scale": scale,
+                                "size": (width, height),
+                            }
+                        )
                     x1 = max(0, max_loc[0] - min_distance)
                     y1 = max(0, max_loc[1] - min_distance)
                     x2 = min(res.shape[1], max_loc[0] + width + min_distance)
@@ -488,12 +499,7 @@ class VisionCore:
                 bgr = template[:, :, :3] if len(template.shape) == 3 else cv2.cvtColor(template, cv2.COLOR_GRAY2BGR)
 
             hsv_ref = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-            valid = (
-                (hsv_ref[:, :, 0] >= 12)
-                & (hsv_ref[:, :, 0] <= 45)
-                & (hsv_ref[:, :, 1] >= 70)
-                & (hsv_ref[:, :, 2] >= 110)
-            )
+            valid = (hsv_ref[:, :, 0] >= 12) & (hsv_ref[:, :, 0] <= 45) & (hsv_ref[:, :, 1] >= 70) & (hsv_ref[:, :, 2] >= 110)
             if alpha_mask is not None:
                 valid &= alpha_mask
             if np.count_nonzero(valid) < 8:
@@ -814,9 +820,7 @@ class VisionCore:
         if not target_template_paths:
             return None
 
-        strategies = (
-            {"name": "target-gray-mask", "threshold": 0.54, "use_mask": True, "mask_threshold": 6},
-        )
+        strategies = ({"name": "target-gray-mask", "threshold": 0.54, "use_mask": True, "mask_threshold": 6},)
         loc, conf, matched_path, strategy = self.find_best_template_multi_strategy(
             roi_img,
             target_template_paths,
@@ -856,12 +860,7 @@ class VisionCore:
         hue = hsv[:, :, 0]
         sat = hsv[:, :, 1]
         val = hsv[:, :, 2]
-        target_like = (
-            (hue >= 48)
-            & (hue <= 102)
-            & (sat >= 125)
-            & (val >= 88)
-        )
+        target_like = (hue >= 48) & (hue <= 102) & (sat >= 125) & (val >= 88)
         bad_wide_rows = 0
         checked_rows = 0
         row_start = max(0, int(y))
@@ -880,11 +879,7 @@ class VisionCore:
             run_w = right - left + 1
             checked_rows += 1
             edge_touch = left <= 1 or right >= roi_w - 2
-            if (
-                run_w > max(roi_w * 0.44, w * 2.20)
-                or (edge_touch and run_w > max(roi_w * 0.22, w * 1.45))
-                or (left <= 1 and right >= roi_w - 2)
-            ):
+            if run_w > max(roi_w * 0.44, w * 2.20) or (edge_touch and run_w > max(roi_w * 0.22, w * 1.45)) or (left <= 1 and right >= roi_w - 2):
                 bad_wide_rows += 1
         if checked_rows and bad_wide_rows >= max(2, int(checked_rows * 0.45)):
             return None
@@ -929,28 +924,28 @@ class VisionCore:
             center_score = 1.0 - min(1.0, abs(cy - roi_h * 0.5) / max(1.0, roi_h * 0.65))
             color_concentration = 0.5
             if hsv_roi is not None:
-                region_mask = (labels[y:y+h, x:x+w] == index)
-                region_hsv = hsv_roi[y:y+h, x:x+w][region_mask]
+                region_mask = labels[y : y + h, x : x + w] == index
+                region_hsv = hsv_roi[y : y + h, x : x + w][region_mask]
                 if len(region_hsv) > 10:
                     h_std = float(np.std(region_hsv[:, 0].astype(float)))
                     color_concentration = max(0.0, min(1.0, 1.0 - (h_std / 20.0)))
-            confidence = max(0.0, min(0.98,
-                vertical_score * 0.28 + height_score * 0.25 +
-                area_score * 0.15 + center_score * 0.12 + color_concentration * 0.20))
+            confidence = max(0.0, min(0.98, vertical_score * 0.28 + height_score * 0.25 + area_score * 0.15 + center_score * 0.12 + color_concentration * 0.20))
             score = confidence + area_score * 0.15
-            candidates.append({
-                "x": int(x),
-                "y": int(y),
-                "w": int(w),
-                "h": int(h),
-                "area": int(area),
-                "cx": float(cx),
-                "cy": float(cy),
-                "confidence": confidence,
-                "color_concentration": color_concentration,
-                "score": score,
-                "source": "color",
-            })
+            candidates.append(
+                {
+                    "x": int(x),
+                    "y": int(y),
+                    "w": int(w),
+                    "h": int(h),
+                    "area": int(area),
+                    "cx": float(cx),
+                    "cy": float(cy),
+                    "confidence": confidence,
+                    "color_concentration": color_concentration,
+                    "score": score,
+                    "source": "color",
+                }
+            )
         return candidates
 
     def _collect_green_bar_candidates(self, mask, roi_w, roi_h):
@@ -976,17 +971,19 @@ class VisionCore:
             score += min(1.0, fill_ratio / 0.55) * 0.20
             score += (1.0 - min(1.0, abs(cy - roi_h * 0.5) / max(1.0, roi_h * 0.55))) * 0.10
             score = max(0.0, score - edge_penalty)
-            candidates.append({
-                "x": int(x),
-                "y": int(y),
-                "w": int(w),
-                "h": int(h),
-                "area": int(area),
-                "cx": float(cx),
-                "cy": float(cy),
-                "confidence": max(0.0, min(0.98, score)),
-                "score": score,
-            })
+            candidates.append(
+                {
+                    "x": int(x),
+                    "y": int(y),
+                    "w": int(w),
+                    "h": int(h),
+                    "area": int(area),
+                    "cx": float(cx),
+                    "cy": float(cy),
+                    "confidence": max(0.0, min(0.98, score)),
+                    "score": score,
+                }
+            )
         return sorted(candidates, key=lambda item: item["score"], reverse=True)[:6]
 
     def _select_cursor_candidate(self, candidates, green_candidates, roi_w, roi_h):
@@ -1176,13 +1173,7 @@ class VisionCore:
         hue = hsv[:, :, 0]
         sat = hsv[:, :, 1]
         val = hsv[:, :, 2]
-        target_like = (
-            (mask > 0)
-            & (hue >= 48)
-            & (hue <= 102)
-            & (sat >= (125 if relaxed else 135))
-            & (val >= (88 if relaxed else 96))
-        )
+        target_like = (mask > 0) & (hue >= 48) & (hue <= 102) & (sat >= (125 if relaxed else 135)) & (val >= (88 if relaxed else 96))
 
         min_piece_w = max(8 if relaxed else 10, int(roi_w * (0.014 if relaxed else 0.018)))
         min_full_w = max(32 if relaxed else 42, int(roi_w * (0.075 if relaxed else 0.095)))
@@ -1204,15 +1195,17 @@ class VisionCore:
             if color_quality < (0.44 if relaxed else 0.52):
                 return
             score = color_quality * 0.46 + width_score * 0.32 + center_score * 0.22
-            row_candidates.append({
-                "row": int(row),
-                "x1": int(x1),
-                "x2": int(x2),
-                "cx": float(cx),
-                "w": int(width),
-                "score": float(score),
-                "source": source,
-            })
+            row_candidates.append(
+                {
+                    "row": int(row),
+                    "x1": int(x1),
+                    "x2": int(x2),
+                    "cx": float(cx),
+                    "w": int(width),
+                    "score": float(score),
+                    "source": source,
+                }
+            )
 
         for row in range(y1, y2):
             xs = np.flatnonzero(target_like[row])
@@ -1246,7 +1239,7 @@ class VisionCore:
                 left_x1, left_x2 = left
                 if left_x1 > cursor_cx:
                     continue
-                for right in runs[left_index + 1:]:
+                for right in runs[left_index + 1 :]:
                     right_x1, right_x2 = right
                     if right_x2 < cursor_cx:
                         continue
@@ -1324,10 +1317,7 @@ class VisionCore:
             hue = hsv[:, :, 0]
             sat = hsv[:, :, 1]
             val = hsv[:, :, 2]
-            target_like = (
-                ((hue >= 48) & (hue <= 102) & (sat >= 120) & (val >= 96))
-                | ((hue >= 56) & (hue <= 96) & (sat >= 155) & (val >= 108))
-            )
+            target_like = ((hue >= 48) & (hue <= 102) & (sat >= 120) & (val >= 96)) | ((hue >= 56) & (hue <= 96) & (sat >= 155) & (val >= 108))
             strict_mask = np.zeros_like(mask)
             strict_mask[(mask > 0) & target_like] = 255
             if cv2.countNonZero(strict_mask) >= max(8, int(roi_w * roi_h * 0.00025)):
@@ -1369,17 +1359,19 @@ class VisionCore:
             if color_quality < (0.42 if relaxed else 0.50):
                 continue
 
-            pieces.append({
-                "x": int(x),
-                "y": int(y),
-                "w": int(w),
-                "h": int(h),
-                "area": int(area),
-                "cx": float(cx),
-                "cy": float(cy),
-                "fill_ratio": float(fill_ratio),
-                "color_quality": color_quality,
-            })
+            pieces.append(
+                {
+                    "x": int(x),
+                    "y": int(y),
+                    "w": int(w),
+                    "h": int(h),
+                    "area": int(area),
+                    "cx": float(cx),
+                    "cy": float(cy),
+                    "fill_ratio": float(fill_ratio),
+                    "color_quality": color_quality,
+                }
+            )
 
         if not pieces:
             return None
@@ -1554,31 +1546,32 @@ class VisionCore:
     def _get_center_x(self, mask, is_vertical=False, strict_shape=True, return_width=False):
         """从二值化掩码中找到最大的合法轮廓，并返回中心X坐标 (以及可选的宽度)"""
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not contours: return None
-        
+        if not contours:
+            return None
+
         # 按照面积从大到小排序，只取最大的那个，防止被背景的小噪点干扰
         contours = sorted(contours, key=cv2.contourArea, reverse=True)
-        
+
         for cnt in contours:
             x, y, w, h = cv2.boundingRect(cnt)
             area = w * h
-            
+
             # 忽略过小的噪点
-            if area < 5: 
+            if area < 5:
                 continue
-                
+
             if strict_shape:
                 # 宽容的形态学过滤：
                 # 黄色游标 (is_vertical=True) 应该是竖着的，高大于宽，放宽要求
-                if is_vertical and w > h * 1.8: 
+                if is_vertical and w > h * 1.8:
                     continue
-                    
+
                 # 绿色目标条 (is_vertical=False) 应该是横着的，宽大于高
                 if not is_vertical and h > w * 1.8:
                     continue
-                
+
             if return_width:
                 return x + w // 2, w
             return x + w // 2
-            
+
         return None

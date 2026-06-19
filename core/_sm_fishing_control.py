@@ -101,11 +101,11 @@ class FishingControl:
             sm.round.fish_control_direction = direction
 
             if direction > 0:
-                sm.ctrl.key_up('A')
-                sm.ctrl.key_down('D')
+                sm.ctrl.key_up("A")
+                sm.ctrl.key_down("D")
             elif direction < 0:
-                sm.ctrl.key_up('D')
-                sm.ctrl.key_down('A')
+                sm.ctrl.key_up("D")
+                sm.ctrl.key_down("A")
             else:
                 sm.ctrl.release_all()
 
@@ -128,7 +128,7 @@ class FishingControl:
             sm._log(f"[{source_label}] > 正在向游戏发送 'F' 键点按指令 (150ms)...")
             sm.ctrl.release_all()
             sm._note_program_input(("F",), duration=0.70)
-            sm.ctrl.key_tap('F', duration=0.15)
+            sm.ctrl.key_tap("F", duration=0.15)
             sm.round.last_cast_time = time.time()
             sm.round.waiting_start_time = sm.round.last_cast_time
             return True

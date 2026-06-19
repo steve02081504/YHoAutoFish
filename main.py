@@ -18,7 +18,7 @@ from core.paths import resource_path
 from core.version import APP_DISPLAY_NAME, APP_NAME, APP_VERSION
 from gui.app import AppWindow
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     app = QApplication(sys.argv)
 
     app.setApplicationName(APP_NAME)

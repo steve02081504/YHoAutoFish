@@ -92,18 +92,18 @@ class NavButton(QPushButton):
             QPushButton {{
                 text-align: left;
                 padding-left: 18px;
-                color: {APP_COLORS['text_dim']};
+                color: {APP_COLORS["text_dim"]};
                 border: 1px solid transparent;
                 outline: none;
                 border-radius: 18px;
                 background-color: transparent;
             }}
             QPushButton:hover {{
-                color: {APP_COLORS['text']};
+                color: {APP_COLORS["text"]};
                 background-color: rgba(255, 255, 255, 0.04);
             }}
             QPushButton:checked {{
-                color: {APP_COLORS['accent_soft']};
+                color: {APP_COLORS["accent_soft"]};
                 background-color: rgba(29, 208, 214, 0.14);
                 border: 1px solid rgba(29, 208, 214, 0.36);
             }}
@@ -124,19 +124,19 @@ class SettingsCategoryButton(QPushButton):
             QPushButton {{
                 text-align: left;
                 padding: 0 14px;
-                color: {APP_COLORS['text_dim']};
+                color: {APP_COLORS["text_dim"]};
                 border: 1px solid rgba(111, 145, 182, 0.12);
                 outline: none;
                 border-radius: 15px;
                 background-color: rgba(255, 255, 255, 0.025);
             }}
             QPushButton:hover {{
-                color: {APP_COLORS['text']};
+                color: {APP_COLORS["text"]};
                 background-color: rgba(255, 255, 255, 0.055);
                 border: 1px solid rgba(111, 145, 182, 0.22);
             }}
             QPushButton:checked {{
-                color: {APP_COLORS['accent_soft']};
+                color: {APP_COLORS["accent_soft"]};
                 background-color: rgba(29, 208, 214, 0.14);
                 border: 1px solid rgba(29, 208, 214, 0.42);
             }}
@@ -268,7 +268,7 @@ class TitleBrand(QFrame):
         mark.setStyleSheet(
             f"""
             QFrame {{
-                background-color: {APP_COLORS['accent_soft']};
+                background-color: {APP_COLORS["accent_soft"]};
                 border: none;
                 border-radius: 2px;
             }}
@@ -276,10 +276,7 @@ class TitleBrand(QFrame):
         )
         layout.addWidget(mark, 0, Qt.AlignVCenter)
 
-        title = QLabel(
-            "<span style='color:#63E4E4;'>异环</span>"
-            "<span style='color:#F3F8FF;'>自动钓鱼</span>"
-        )
+        title = QLabel("<span style='color:#63E4E4;'>异环</span><span style='color:#F3F8FF;'>自动钓鱼</span>")
         title.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         title.setStyleSheet(
             """
@@ -502,17 +499,13 @@ class TakeoverPauseDialog(QDialog):
         detail_label = QLabel(f"检测到用户接管：{detail or '游戏窗口内输入'}")
         detail_label.setWordWrap(True)
         detail_label.setAlignment(Qt.AlignCenter)
-        detail_label.setStyleSheet(
-            "background: transparent; border: none; color: #FFF7E8; font-size: 15px; font-weight: 800;"
-        )
+        detail_label.setStyleSheet("background: transparent; border: none; color: #FFF7E8; font-size: 15px; font-weight: 800;")
         layout.addWidget(detail_label)
 
         body = QLabel("程序已释放全部按键并停止后续操作。需要继续时，请重新点击“开始钓鱼”，并保持挂机状态不要操作游戏。")
         body.setWordWrap(True)
         body.setAlignment(Qt.AlignCenter)
-        body.setStyleSheet(
-            "background: transparent; border: none; color: #FFD3D7; font-size: 13px; line-height: 1.6;"
-        )
+        body.setStyleSheet("background: transparent; border: none; color: #FFD3D7; font-size: 13px; line-height: 1.6;")
         layout.addWidget(body)
 
         close_btn = QPushButton("我知道了")
@@ -553,7 +546,7 @@ class ToastPopup(QFrame):
             QLabel {{
                 background: transparent;
                 border: none;
-                color: {APP_COLORS['text']};
+                color: {APP_COLORS["text"]};
                 font-size: 13px;
                 font-weight: 800;
             }}
@@ -627,12 +620,7 @@ class FloatingControlWindow(QFrame):
         self._last_log_version = -1
         self._last_log_text = None
         self.setWindowTitle("异环自动钓鱼悬浮控制")
-        self.setWindowFlags(
-            Qt.Tool
-            | Qt.FramelessWindowHint
-            | Qt.WindowStaysOnTopHint
-            | Qt.WindowDoesNotAcceptFocus
-        )
+        self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setFocusPolicy(Qt.NoFocus)
 
@@ -659,9 +647,7 @@ class FloatingControlWindow(QFrame):
 
         header = QHBoxLayout()
         title = QLabel("钓鱼悬浮窗")
-        title.setStyleSheet(
-            f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 14px; font-weight: 900;"
-        )
+        title.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 14px; font-weight: 900;")
         header.addWidget(title)
         header.addStretch()
 
@@ -755,9 +741,7 @@ class FloatingControlWindow(QFrame):
         debug_layout.setSpacing(10)
 
         debug_title = QLabel("调试溜鱼视图")
-        debug_title.setStyleSheet(
-            f"background: transparent; border: none; color: {APP_COLORS['accent_soft']}; font-size: 12px; font-weight: 800;"
-        )
+        debug_title.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['accent_soft']}; font-size: 12px; font-weight: 800;")
         debug_layout.addWidget(debug_title)
 
         self.debug_preview = QLabel("等待画面...")
@@ -810,7 +794,7 @@ class FloatingControlWindow(QFrame):
         return f"""
         QPushButton {{
             background-color: rgba(255, 255, 255, 0.05);
-            color: {APP_COLORS['text_dim']};
+            color: {APP_COLORS["text_dim"]};
             border: 1px solid rgba(111, 145, 182, 0.18);
             border-radius: 15px;
             font-size: 16px;
@@ -819,7 +803,7 @@ class FloatingControlWindow(QFrame):
         QPushButton:hover {{
             background-color: {hover_bg};
             border: 1px solid {hover_border};
-            color: {APP_COLORS['text']};
+            color: {APP_COLORS["text"]};
         }}
         """
 
@@ -828,7 +812,7 @@ class FloatingControlWindow(QFrame):
             return f"""
             QPushButton {{
                 background-color: rgba(29, 208, 214, 0.22);
-                color: {APP_COLORS['accent_soft']};
+                color: {APP_COLORS["accent_soft"]};
                 border: 1px solid rgba(29, 208, 214, 0.35);
                 border-radius: 13px;
                 min-height: 28px;
@@ -839,7 +823,7 @@ class FloatingControlWindow(QFrame):
         return f"""
         QPushButton {{
             background-color: transparent;
-            color: {APP_COLORS['text_dim']};
+            color: {APP_COLORS["text_dim"]};
             border: 1px solid transparent;
             border-radius: 13px;
             min-height: 28px;
@@ -848,7 +832,7 @@ class FloatingControlWindow(QFrame):
         }}
         QPushButton:hover {{
             background-color: rgba(255, 255, 255, 0.055);
-            color: {APP_COLORS['text']};
+            color: {APP_COLORS["text"]};
         }}
         """
 
@@ -856,7 +840,7 @@ class FloatingControlWindow(QFrame):
         return f"""
         QPlainTextEdit {{
             background-color: rgba(5, 12, 20, 0.82);
-            color: {APP_COLORS['text_dim']};
+            color: {APP_COLORS["text_dim"]};
             border: 1px solid rgba(87, 119, 153, 0.18);
             border-radius: 16px;
             padding: 10px;
@@ -1036,7 +1020,7 @@ class FloatingControlWindow(QFrame):
             f"""
             QPushButton {{
                 background-color: rgba(255, 82, 117, 0.16);
-                color: {APP_COLORS['danger']};
+                color: {APP_COLORS["danger"]};
                 border: 1px solid rgba(255, 82, 117, 0.34);
                 border-radius: 18px;
                 min-height: 40px;
@@ -1046,11 +1030,11 @@ class FloatingControlWindow(QFrame):
             }}
             QPushButton:hover {{
                 background-color: rgba(255, 82, 117, 0.26);
-                color: {APP_COLORS['text']};
+                color: {APP_COLORS["text"]};
             }}
             QPushButton:disabled {{
                 background-color: rgba(255, 255, 255, 0.035);
-                color: {APP_COLORS['text_soft']};
+                color: {APP_COLORS["text_soft"]};
                 border: 1px solid rgba(111, 145, 182, 0.12);
             }}
             """
@@ -1851,7 +1835,7 @@ class AppWindow(QMainWindow):
             f"""
             QPushButton {{
                 background-color: rgba(22, 209, 214, 0.10);
-                color: {APP_COLORS['accent_soft']};
+                color: {APP_COLORS["accent_soft"]};
                 border: 1px solid rgba(22, 209, 214, 0.34);
                 border-radius: 18px;
                 font-size: 12px;
@@ -1859,7 +1843,7 @@ class AppWindow(QMainWindow):
             }}
             QPushButton:hover {{
                 background-color: rgba(22, 209, 214, 0.20);
-                color: {APP_COLORS['text']};
+                color: {APP_COLORS["text"]};
             }}
             """
         )
@@ -1904,22 +1888,16 @@ class AppWindow(QMainWindow):
         debug_layout.setSpacing(10)
 
         debug_title = QLabel("调试溜鱼视图")
-        debug_title.setStyleSheet(
-            f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 16px; font-weight: 800;"
-        )
+        debug_title.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 16px; font-weight: 800;")
         debug_layout.addWidget(debug_title)
 
         debug_note = QLabel("用于回看溜鱼阶段识别到的绿条、黄条位置，方便定位识别问题。")
         debug_note.setWordWrap(True)
-        debug_note.setStyleSheet(
-            f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 12px;"
-        )
+        debug_note.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 12px;")
         debug_layout.addWidget(debug_note)
 
         self.debug_state_label = QLabel()
-        self.debug_state_label.setStyleSheet(
-            f"background: transparent; border: none; color: {APP_COLORS['accent_soft']}; font-size: 12px; font-weight: 700;"
-        )
+        self.debug_state_label.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['accent_soft']}; font-size: 12px; font-weight: 700;")
         debug_layout.addWidget(self.debug_state_label)
 
         self.debug_preview = QLabel()
@@ -1936,9 +1914,7 @@ class AppWindow(QMainWindow):
 
         self.debug_help_label = QLabel()
         self.debug_help_label.setWordWrap(True)
-        self.debug_help_label.setStyleSheet(
-            f"background: transparent; border: none; color: {APP_COLORS['text_soft']}; font-size: 12px;"
-        )
+        self.debug_help_label.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text_soft']}; font-size: 12px;")
         debug_layout.addWidget(self.debug_help_label)
         debug_layout.addStretch()
 
@@ -1985,16 +1961,12 @@ class AppWindow(QMainWindow):
         category_layout.setSpacing(8)
 
         category_title = QLabel("设置分类")
-        category_title.setStyleSheet(
-            f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 15px; font-weight: 900;"
-        )
+        category_title.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 15px; font-weight: 900;")
         category_layout.addWidget(category_title)
 
         category_note = QLabel("选择左侧分类后，只显示对应参数。")
         category_note.setWordWrap(True)
-        category_note.setStyleSheet(
-            f"background: transparent; border: none; color: {APP_COLORS['text_soft']}; font-size: 11px;"
-        )
+        category_note.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text_soft']}; font-size: 11px;")
         category_layout.addWidget(category_note)
 
         self.settings_category_layout = category_layout
@@ -2403,9 +2375,7 @@ class AppWindow(QMainWindow):
 
         self.settings_status_label = QLabel("当前设置已保存")
         self.settings_status_label.setWordWrap(True)
-        self.settings_status_label.setStyleSheet(
-            f"background: transparent; border: none; color: {APP_COLORS['text_soft']}; font-size: 12px;"
-        )
+        self.settings_status_label.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text_soft']}; font-size: 12px;")
         action_layout.addWidget(self.settings_status_label, 1)
 
         self.reset_settings_btn = QPushButton("恢复当前分类推荐值")
@@ -2438,16 +2408,12 @@ class AppWindow(QMainWindow):
         layout.setSpacing(14)
 
         title_label = QLabel(title)
-        title_label.setStyleSheet(
-            f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 20px; font-weight: 900;"
-        )
+        title_label.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 20px; font-weight: 900;")
         layout.addWidget(title_label)
 
         note_label = QLabel(description)
         note_label.setWordWrap(True)
-        note_label.setStyleSheet(
-            f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 12px;"
-        )
+        note_label.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 12px;")
         layout.addWidget(note_label)
         return page, layout
 
@@ -2503,9 +2469,7 @@ class AppWindow(QMainWindow):
 
         top = QHBoxLayout()
         title_label = QLabel(title)
-        title_label.setStyleSheet(
-            f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 16px; font-weight: 800;"
-        )
+        title_label.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 16px; font-weight: 800;")
         top.addWidget(title_label)
         top.addStretch()
         value_label = QLabel(value_text)
@@ -2514,7 +2478,7 @@ class AppWindow(QMainWindow):
         value_label.setStyleSheet(
             f"""
             QLabel {{
-                color: {APP_COLORS['accent_soft']};
+                color: {APP_COLORS["accent_soft"]};
                 background-color: rgba(29, 208, 214, 0.10);
                 border: 1px solid rgba(29, 208, 214, 0.22);
                 border-radius: 14px;
@@ -2529,9 +2493,7 @@ class AppWindow(QMainWindow):
 
         note_label = QLabel(note)
         note_label.setWordWrap(True)
-        note_label.setStyleSheet(
-            f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 12px;"
-        )
+        note_label.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 12px;")
         layout.addWidget(note_label)
         parent_layout.addWidget(block)
         return block
@@ -2543,16 +2505,12 @@ class AppWindow(QMainWindow):
         layout.setSpacing(10)
 
         title_label = QLabel(title)
-        title_label.setStyleSheet(
-            f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 16px; font-weight: 800;"
-        )
+        title_label.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 16px; font-weight: 800;")
         layout.addWidget(title_label)
 
         note_label = QLabel(note)
         note_label.setWordWrap(True)
-        note_label.setStyleSheet(
-            f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 12px;"
-        )
+        note_label.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 12px;")
         layout.addWidget(note_label)
 
         row = QHBoxLayout()
@@ -2608,7 +2566,7 @@ class AppWindow(QMainWindow):
         value_label.setStyleSheet(
             f"""
             QLabel {{
-                color: {APP_COLORS['accent_soft']};
+                color: {APP_COLORS["accent_soft"]};
                 background-color: rgba(29, 208, 214, 0.10);
                 border: 1px solid rgba(29, 208, 214, 0.22);
                 border-radius: 14px;
@@ -2654,14 +2612,7 @@ class AppWindow(QMainWindow):
             """
         )
         slider.valueChanged.connect(
-            lambda new_value,
-            label=value_label,
-            config_key=key,
-            cfg_scale=value_scale,
-            disp_scale=display_scale,
-            suffix=display_suffix,
-            disp_decimals=display_decimals,
-            cfg_decimals=config_decimals: self._update_slider_value(
+            lambda new_value, label=value_label, config_key=key, cfg_scale=value_scale, disp_scale=display_scale, suffix=display_suffix, disp_decimals=display_decimals, cfg_decimals=config_decimals: self._update_slider_value(
                 label,
                 config_key,
                 new_value,
@@ -2696,16 +2647,12 @@ class AppWindow(QMainWindow):
         text_col.setSpacing(6)
 
         title_label = QLabel(title)
-        title_label.setStyleSheet(
-            f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 16px; font-weight: 800;"
-        )
+        title_label.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 16px; font-weight: 800;")
         text_col.addWidget(title_label)
 
         note_label = QLabel(note)
         note_label.setWordWrap(True)
-        note_label.setStyleSheet(
-            f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 12px;"
-        )
+        note_label.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 12px;")
         text_col.addWidget(note_label)
         layout.addLayout(text_col, 1)
 
@@ -2715,9 +2662,7 @@ class AppWindow(QMainWindow):
         button.setChecked(bool(checked))
         button.setStyleSheet(secondary_button_stylesheet())
         button.setMinimumWidth(86)
-        button.toggled.connect(
-            lambda is_checked, cfg_key=key, btn=button: self._update_toggle_value(btn, cfg_key, is_checked)
-        )
+        button.toggled.connect(lambda is_checked, cfg_key=key, btn=button: self._update_toggle_value(btn, cfg_key, is_checked))
         self._update_toggle_value(button, key, bool(checked))
         layout.addWidget(button)
 
@@ -2732,16 +2677,12 @@ class AppWindow(QMainWindow):
         layout.setSpacing(10)
 
         title_label = QLabel(title)
-        title_label.setStyleSheet(
-            f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 16px; font-weight: 800;"
-        )
+        title_label.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 16px; font-weight: 800;")
         layout.addWidget(title_label)
 
         note_label = QLabel(note)
         note_label.setWordWrap(True)
-        note_label.setStyleSheet(
-            f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 12px;"
-        )
+        note_label.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 12px;")
         layout.addWidget(note_label)
 
         line_edit = QLineEdit(str(value or ""))
@@ -2753,7 +2694,7 @@ class AppWindow(QMainWindow):
                 background-color: rgba(255, 255, 255, 0.05);
                 border: 1px solid rgba(111, 145, 182, 0.22);
                 border-radius: 14px;
-                color: {APP_COLORS['text']};
+                color: {APP_COLORS["text"]};
                 padding: 0 14px;
                 font-size: 13px;
             }}
@@ -2823,14 +2764,10 @@ class AppWindow(QMainWindow):
         if hasattr(self, "settings_status_label"):
             if self._settings_dirty:
                 self.settings_status_label.setText("有未保存更改。保存后会立即同步到运行参数，并写入配置文件。")
-                self.settings_status_label.setStyleSheet(
-                    f"background: transparent; border: none; color: {APP_COLORS['warning']}; font-size: 12px; font-weight: 700;"
-                )
+                self.settings_status_label.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['warning']}; font-size: 12px; font-weight: 700;")
             else:
                 self.settings_status_label.setText("当前设置已保存")
-                self.settings_status_label.setStyleSheet(
-                    f"background: transparent; border: none; color: {APP_COLORS['text_soft']}; font-size: 12px;"
-                )
+                self.settings_status_label.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text_soft']}; font-size: 12px;")
 
     def _settings_snapshot_keys(self):
         if getattr(self, "_setting_widgets", None):
@@ -3115,4 +3052,3 @@ class AppWindow(QMainWindow):
         self.page_record.refresh_data()
         if self.page_encyclopedia is not None:
             self.page_encyclopedia.refresh_data()
-

@@ -53,7 +53,6 @@ def ensure_admin_or_relaunch(app_name="YHo AutoFish"):
         return False
     _message_box(
         app_name,
-        "本程序需要管理员权限才能模拟按键并控制游戏窗口。\n\n"
-        "请在 Windows 权限确认窗口中选择“是”，或右键选择“以管理员身份运行”。",
+        "本程序需要管理员权限才能模拟按键并控制游戏窗口。\n\n请在 Windows 权限确认窗口中选择“是”，或右键选择“以管理员身份运行”。",
     )
     return False
